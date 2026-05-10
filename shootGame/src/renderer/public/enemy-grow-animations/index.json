@@ -1,0 +1,26 @@
+[
+  {
+    "source": "me1.png",
+    "sheet": "me1-grow.png",
+    "frameWidth": 640,
+    "frameHeight": 640,
+    "frames": 18,
+    "duration": 0.72
+  },
+  {
+    "source": "me2.png",
+    "sheet": "me2-grow.png",
+    "frameWidth": 640,
+    "frameHeight": 640,
+    "frames": 18,
+    "duration": 0.72
+  },
+  {
+    "source": "me3.png",
+    "sheet": "me3-grow.png",
+    "frameWidth": 640,
+    "frameHeight": 640,
+    "frames": 18,
+    "duration": 0.72
+  }
+]

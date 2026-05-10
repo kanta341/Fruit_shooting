@@ -1,0 +1,50 @@
+.DS_Store
+Thumbs.db
+
+# Local editor / assistant state
+.claude/
+.vscode/
+.idea/
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# Python
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Node / Electron / Vite
+node_modules/
+shootGame/node_modules/
+shootGame/dist/
+shootGame/dist-electron/
+shootGame/src/renderer/dist/
+shootGame/release/
+shootGame/out/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Capacitor generated web payload
+shootGame/ios/App/App/public/
+
+# Xcode / iOS build products
+DerivedData/
+build/
+*.xcuserstate
+xcuserdata/
+*.xcworkspace/xcuserdata/
+*.xcodeproj/xcuserdata/
+
+# Runtime output
+*.tmp
+*.temp

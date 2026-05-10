@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="dark">
+  <title>Fruit Shooter Draw2</title>
+  <style>
+    :root {
+      font-family: "Hiragino Sans", "Yu Gothic", -apple-system, BlinkMacSystemFont, sans-serif;
+      color: #fff;
+      background: #070817;
+    }
+    * {
+      box-sizing: border-box;
+      -webkit-tap-highlight-color: transparent;
+      -webkit-user-select: none;
+      user-select: none;
+      -webkit-touch-callout: none;
+    }
+    html, body { margin: 0; min-height: 100%; overflow: hidden; }
+    body {
+      display: grid;
+      place-items: center;
+      padding: max(24px, env(safe-area-inset-top)) max(24px, env(safe-area-inset-right)) max(24px, env(safe-area-inset-bottom)) max(24px, env(safe-area-inset-left));
+      background:
+        radial-gradient(circle at 20% 18%, rgba(255, 214, 102, .25), transparent 30%),
+        radial-gradient(circle at 78% 72%, rgba(106, 217, 255, .2), transparent 32%),
+        linear-gradient(145deg, #07152d 0%, #12133a 52%, #280d31 100%);
+      user-select: none;
+      touch-action: manipulation;
+    }
+    .shell {
+      width: min(720px, 92vw);
+      display: grid;
+      gap: 22px;
+      padding: clamp(24px, 5vw, 46px);
+      border: 1px solid rgba(255,255,255,.18);
+      border-radius: 28px;
+      background: rgba(8, 10, 28, .64);
+      box-shadow: 0 28px 90px rgba(0,0,0,.48), inset 0 0 34px rgba(255,255,255,.05);
+      backdrop-filter: blur(18px);
+    }
+    h1 {
+      margin: 0;
+      font-size: clamp(34px, 7vw, 68px);
+      line-height: 1;
+      letter-spacing: 0;
+      text-align: center;
+      text-shadow: 0 0 28px rgba(255, 220, 100, .42);
+    }
+    .lead {
+      margin: 0;
+      color: rgba(255,255,255,.82);
+      font-size: clamp(16px, 2.4vw, 22px);
+      font-weight: 800;
+      line-height: 1.55;
+      text-align: center;
+    }
+    label {
+      display: grid;
+      gap: 10px;
+      color: rgba(255,255,255,.78);
+      font-weight: 900;
+      font-size: 17px;
+    }
+    input {
+      width: 100%;
+      border: 2px solid rgba(255,255,255,.2);
+      border-radius: 18px;
+      padding: 18px 20px;
+      background: rgba(255,255,255,.94);
+      color: #1c2030;
+      font: inherit;
+      font-size: clamp(22px, 4vw, 34px);
+      font-weight: 1000;
+      text-align: center;
+      outline: none;
+    }
+    input:focus { border-color: #ffe66d; box-shadow: 0 0 0 5px rgba(255,230,109,.18); }
+    .actions { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+    button {
+      border: 0;
+      border-radius: 18px;
+      min-height: 68px;
+      padding: 14px 18px;
+      color: #1f2435;
+      background: #ffe66d;
+      font: inherit;
+      font-size: clamp(18px, 3vw, 26px);
+      font-weight: 1000;
+      box-shadow: 0 14px 30px rgba(0,0,0,.28);
+    }
+    button.secondary { background: rgba(255,255,255,.18); color: #fff; border: 1px solid rgba(255,255,255,.24); }
+    .status {
+      min-height: 26px;
+      color: rgba(255,255,255,.82);
+      font-size: 16px;
+      font-weight: 800;
+      text-align: center;
+    }
+    .hint {
+      margin: 0;
+      color: rgba(255,255,255,.62);
+      font-size: 14px;
+      line-height: 1.5;
+      text-align: center;
+    }
+    @media (max-width: 620px) {
+      .actions { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <h1>お絵描き画面</h1>
+    <p class="lead">Mac側のゲームを起動してから、MacのIPアドレスを指定して /draw2 を開きます。</p>
+    <label>
+      Mac の接続先
+      <input id="serverInput" autocomplete="off" autocapitalize="off" spellcheck="false" inputmode="url" placeholder="例: 192.168.0.10:8030">
+    </label>
+    <div class="actions">
+      <button id="openButton">お絵描きを開く</button>
+      <button id="testButton" class="secondary">接続確認</button>
+    </div>
+    <div id="status" class="status"></div>
+    <p class="hint">Type-C接続はインストールとデバッグに使います。通信は同じWi-Fi、またはMac側のネットワーク共有でiPadからMacへアクセスできる状態にしてください。</p>
+  </main>
+  <script>
+    const input = document.getElementById('serverInput');
+    const statusEl = document.getElementById('status');
+    const defaultPort = '8030';
+
+    function normalizeServer(value) {
+      let text = String(value || '').trim();
+      text = text.replace(/^https?:\/\//i, '').replace(/\/.*$/, '');
+      if (!text) return '';
+      if (!text.includes(':')) text += ':' + defaultPort;
+      return text;
+    }
+
+    function draw2Url(server) {
+      return 'http://' + server + '/draw2?native=1';
+    }
+
+    function setStatus(message) {
+      statusEl.textContent = message;
+    }
+
+    const stored = localStorage.getItem('draw2NativeServer') || '';
+    input.value = stored || '';
+
+    document.getElementById('openButton').addEventListener('click', () => {
+      const server = normalizeServer(input.value);
+      if (!server) {
+        setStatus('MacのIPアドレスを入力してください');
+        return;
+      }
+      localStorage.setItem('draw2NativeServer', server);
+      setStatus('接続中...');
+      window.location.href = draw2Url(server);
+    });
+
+    document.getElementById('testButton').addEventListener('click', async () => {
+      const server = normalizeServer(input.value);
+      if (!server) {
+        setStatus('MacのIPアドレスを入力してください');
+        return;
+      }
+      localStorage.setItem('draw2NativeServer', server);
+      setStatus('確認中...');
+      try {
+        const response = await fetch('http://' + server + '/api/status?t=' + Date.now(), { cache: 'no-store' });
+        setStatus(response.ok ? '接続できます' : '応答はありますが状態確認に失敗しました');
+      } catch (error) {
+        setStatus('接続できません。Mac側の起動、IP、同一ネットワークを確認してください');
+      }
+    });
+  </script>
+</body>
+</html>

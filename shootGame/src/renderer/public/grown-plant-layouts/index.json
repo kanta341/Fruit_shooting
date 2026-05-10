@@ -1,0 +1,54 @@
+{
+  "plants": [
+    {
+      "name": "image.png",
+      "width": 1024,
+      "height": 1536,
+      "anchorX": 833,
+      "anchorY": 582.0
+    },
+    {
+      "name": "image2.png",
+      "width": 1024,
+      "height": 1536,
+      "anchorX": 190,
+      "anchorY": 591.0
+    },
+    {
+      "name": "image3.png",
+      "width": 1024,
+      "height": 1536,
+      "anchorX": 220,
+      "anchorY": 610.0
+    }
+  ],
+  "fruits": {
+    "banana": [
+      {
+        "name": "banana1.png",
+        "width": 1024,
+        "height": 1536,
+        "anchorX": 604.0,
+        "anchorY": 462.0
+      }
+    ],
+    "apple": [
+      {
+        "name": "apple1.png",
+        "width": 1024,
+        "height": 1536,
+        "anchorX": 362.0,
+        "anchorY": 422.0
+      }
+    ],
+    "grape": [
+      {
+        "name": "grape1.png",
+        "width": 1024,
+        "height": 1536,
+        "anchorX": 420.0,
+        "anchorY": 319.0
+      }
+    ]
+  }
+}

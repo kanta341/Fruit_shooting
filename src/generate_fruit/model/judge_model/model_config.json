@@ -1,0 +1,73 @@
+{
+  "input_size": 128,
+  "input_channels": 1,
+  "input_dtype_for_model": "float32",
+  "input_dtype_in_dataset_cache": "uint8",
+  "input_value_meaning": {
+    "0": "background",
+    "1": "stroke"
+  },
+  "class_names": [
+    "apple",
+    "banana",
+    "grapes"
+  ],
+  "output_activation": "sigmoid",
+  "recommended_threshold": 0.6,
+  "line_width_px": 2,
+  "preprocessing": {
+    "canvas": "white background, black stroke",
+    "crop": "crop bounding box of stroke pixels",
+    "padding_ratio": 0.1,
+    "resize": "128x128",
+    "binarize": "stroke pixels -> 1, background -> 0"
+  },
+  "decision_rule": "if max(score) < threshold, label is none; otherwise argmax class",
+  "positive_classes": [
+    "apple",
+    "banana",
+    "grapes"
+  ],
+  "negative_classes": [
+    "cat",
+    "dog",
+    "car",
+    "bicycle",
+    "house",
+    "chair",
+    "tree",
+    "flower",
+    "star",
+    "cloud",
+    "fish",
+    "bird",
+    "clock",
+    "face",
+    "hand",
+    "cup",
+    "book",
+    "airplane",
+    "umbrella",
+    "shoe",
+    "hat",
+    "key",
+    "bed",
+    "door",
+    "circle",
+    "square",
+    "triangle",
+    "line",
+    "moon",
+    "sun",
+    "strawberry",
+    "pineapple",
+    "watermelon",
+    "pear"
+  ],
+  "samples_per_positive_class": 15000,
+  "samples_per_negative_class": 1250,
+  "num_blank_negatives": 1000,
+  "num_random_stroke_negatives": 2000,
+  "batch_size": 64,
+  "epochs": 25
+}
