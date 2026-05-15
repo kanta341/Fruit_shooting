@@ -41,6 +41,7 @@ const remoteShotQueue: QueuedRemoteShot[] = []
 let nextRemotePredictionId = 0
 let nextRemoteShotId = 0
 let feverUntil = 0
+let tutorialState = { index: 0, token: 0 }
 let nextUiSoundEventId = 0
 const uiSoundEvents: Array<{ id: number; key: string }> = []
 const bossMirrorState: {
@@ -60,6 +61,9 @@ let gameFlowState: GameFlowState = {
     result: null,
     difficulty: 'normal',
     signal: Date.now(),
+    totalPlaySeconds: 0,
+    attemptCount: 0,
+    shouldHandoff: false,
 }
 const remoteDrawConfig = {
     realtimeIntervalMs: 50,
@@ -75,8 +79,8 @@ const gameResultState: GameResultState = {
 
 type SpaceEnemyType = 'normal' | 'apple' | 'banana' | 'grape' | 'boss'
 type SpaceEnemyRequirement = 'apple' | 'banana' | 'grape' | null
-type SmallStaticFruitType = 'berry' | 'lemon' | 'orange' | 'peach'
-type StaticFruitType = SmallStaticFruitType | 'suika'
+type SmallStaticFruitType = 'berry' | 'lemon' | 'peach'
+type StaticFruitType = SmallStaticFruitType | 'dorian'
 type FruitName = 'banana' | 'apple' | 'grape' | StaticFruitType
 type GameFlowPhase = 'playing' | 'ended' | 'handoff' | 'difficulty' | 'tutorial' | 'tutorial_done'
 type GameDifficulty = 'easy' | 'normal' | 'hard' | 'challenge'
@@ -86,6 +90,9 @@ type GameFlowState = {
     result: 'clear' | 'over' | null
     difficulty: GameDifficulty
     signal: number
+    totalPlaySeconds: number
+    attemptCount: number
+    shouldHandoff: boolean
 }
 
 type SpaceEnemyConfig = {
@@ -289,7 +296,7 @@ type PredictRequest = {
     image_id: string
     fruit_name: string
     judge_mode: string
-    predict_mode?: 'generated' | 'judge'
+    predict_mode?: 'generated' | 'judge' | 'shape_match'
     generated_variant?: 'banana_400' | 'apple_512' | 'grape_400'
     banana_postprocess?: boolean
     keep_largest?: boolean
@@ -375,6 +382,10 @@ type QueuedRemoteShot = {
     processing_height: number
     frame_width: number
     frame_height: number
+    launch_x?: number
+    launch_y?: number
+    launch_vx?: number
+    launch_vy?: number
 }
 
 type FruitCounts = {
@@ -1382,13 +1393,7 @@ const renderBossPage = () => {
         :root { color-scheme: dark; font-family: "Hiragino Sans","Yu Gothic",sans-serif; }
         * { box-sizing: border-box; }
         body { margin: 0; min-height: 100vh; overflow: hidden; color: #fff; background: #070817; }
-        .slide {
-            position: fixed; inset: 0; opacity: 0; transform: scale(1.04) translateY(18px);
-            transition: opacity 900ms ease, transform 900ms cubic-bezier(.2,.8,.2,1), filter 900ms ease;
-            filter: blur(10px); pointer-events: none;
-        }
-        .slide.active { opacity: 1; transform: scale(1) translateY(0); filter: blur(0); z-index: 2; }
-        .slide.leaving { opacity: 0; transform: scale(.98) translateY(-18px); filter: blur(12px); z-index: 1; }
+        .slide { position: fixed; inset: 0; opacity: 1; transform: none; }
         .stars, .stars::before, .stars::after {
             position: absolute; inset: 0; content: ""; pointer-events: none;
             background-image:
@@ -1404,36 +1409,37 @@ const renderBossPage = () => {
                 radial-gradient(circle at 16% 72%, rgba(102,182,255,.18), transparent 32%),
                 linear-gradient(180deg, #090b22 0%, #151238 54%, #090817 100%);
         }
-        main { position: relative; z-index: 1; min-height: 100vh; padding: clamp(22px, 4vw, 54px); display: grid; grid-template-rows: auto 1fr; gap: clamp(18px, 3vw, 36px); }
+        main { position: relative; z-index: 1; min-height: 100vh; padding: clamp(22px, 4vw, 54px); display: grid; grid-template-rows: auto 1fr; gap: clamp(16px, 2.4vw, 30px); }
         header { text-align: center; display: grid; gap: 8px; }
         .kicker { font-size: clamp(16px, 2vw, 24px); color: #ffd86b; font-weight: 900; letter-spacing: .08em; }
-        h1 { margin: 0; font-size: clamp(38px, 7vw, 96px); line-height: .95; text-shadow: 0 0 28px rgba(255,205,76,.45); }
+        h1 { margin: 0; font-size: clamp(36px, 6.4vw, 86px); line-height: .95; text-shadow: 0 0 28px rgba(255,205,76,.45); }
         .subtitle { font-size: clamp(16px, 2.3vw, 28px); color: rgba(255,255,255,.82); font-weight: 800; }
         .grid { align-self: center; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: clamp(12px, 2vw, 24px); }
         .card {
-            min-height: clamp(260px, 38vh, 440px); border: 2px solid rgba(255,255,255,.18); border-radius: 22px;
-            padding: clamp(14px, 2vw, 26px); background: linear-gradient(180deg, rgba(255,255,255,.12), rgba(255,255,255,.05));
+            min-width: 0; min-height: clamp(260px, 38vh, 420px); border: 2px solid rgba(255,255,255,.18); border-radius: 22px;
+            padding: clamp(12px, 1.8vw, 24px); background: linear-gradient(180deg, rgba(255,255,255,.12), rgba(255,255,255,.05));
             box-shadow: 0 22px 60px rgba(0,0,0,.34), inset 0 0 28px rgba(255,255,255,.04);
-            display: grid; grid-template-rows: auto 1fr auto; justify-items: center; align-items: center;
+            display: grid; grid-template-rows: auto minmax(96px, 1fr) auto; justify-items: center; align-items: center;
+            overflow: hidden;
         }
         .card.easy { --accent: #66d68f; } .card.normal { --accent: #67b7ff; } .card.hard { --accent: #ff8a56; } .card.challenge { --accent: #ff4fb8; }
-        .label { color: var(--accent); font-weight: 1000; font-size: clamp(20px, 2.4vw, 34px); text-shadow: 0 0 18px color-mix(in srgb, var(--accent), transparent 45%); }
-        .boss-wrap { width: min(72%, 230px); aspect-ratio: 1; display: grid; place-items: center; filter: drop-shadow(0 18px 28px rgba(0,0,0,.5)); }
+        .label { color: var(--accent); font-weight: 1000; font-size: clamp(18px, 2.2vw, 32px); text-shadow: 0 0 18px color-mix(in srgb, var(--accent), transparent 45%); white-space: nowrap; }
+        .boss-wrap { width: min(66%, 210px); aspect-ratio: 1; display: grid; place-items: center; filter: drop-shadow(0 18px 28px rgba(0,0,0,.5)); }
         .boss-wrap img { width: 100%; height: 100%; object-fit: contain; }
-        .count { font-size: clamp(54px, 8vw, 126px); font-weight: 1000; line-height: .8; color: #fff; text-shadow: 0 0 24px var(--accent); }
+        .count-wrap { min-width: 0; width: 100%; text-align: center; }
+        .count {
+            display: block; max-width: 100%; font-size: clamp(42px, 6.8vw, 112px); font-weight: 1000; line-height: .86;
+            color: #fff; text-shadow: 0 0 24px var(--accent); font-variant-numeric: tabular-nums;
+            white-space: nowrap; overflow: hidden; text-overflow: clip;
+        }
+        .count.digits-4 { font-size: clamp(38px, 5.6vw, 92px); }
+        .count.digits-5 { font-size: clamp(32px, 4.8vw, 78px); }
+        .count.digits-6 { font-size: clamp(28px, 4vw, 66px); }
         .unit { margin-top: 8px; font-size: clamp(18px, 2.2vw, 30px); color: rgba(255,255,255,.82); font-weight: 900; }
-        .vote { display: grid; place-items: center; text-align: center; padding: 8vw; background: radial-gradient(circle at 50% 50%, rgba(255,231,95,.28), transparent 34%), linear-gradient(135deg,#081333,#220b3a 52%,#3a1026); }
-        .vote h2 { margin: 0; font-size: clamp(52px, 9vw, 150px); line-height: 1.06; text-shadow: 0 0 38px rgba(255,220,85,.55); }
-        .vote p { margin: 28px 0 0; font-size: clamp(24px, 4vw, 58px); font-weight: 1000; color: #ffe66d; }
-        .hint-slide { display: grid; place-items: center; padding: 7vw; text-align: center; background: radial-gradient(circle at 70% 20%, rgba(255,230,109,.22), transparent 30%), radial-gradient(circle at 18% 74%, rgba(102,217,255,.2), transparent 34%), linear-gradient(135deg,#07182f,#171044 54%,#260c31); }
-        .hint-slide.alt { background: radial-gradient(circle at 50% 40%, rgba(255,231,95,.3), transparent 34%), linear-gradient(135deg,#0c1431,#182347 48%,#101629); }
-        .hint-box { width: min(1120px, 92vw); display: grid; gap: clamp(20px, 3vw, 42px); }
-        .hint-title { font-size: clamp(46px, 7vw, 110px); font-weight: 1000; line-height: 1; text-shadow: 0 0 34px rgba(102,217,255,.5); }
-        .hint-lines { display: grid; gap: clamp(14px, 2vw, 26px); font-size: clamp(24px, 4vw, 58px); font-weight: 1000; line-height: 1.18; }
-        .fruit-word.apple { color: #ff6b78; } .fruit-word.grape { color: #bd8cff; } .fruit-word.banana { color: #ffe66d; }
-        .hint-small { font-size: clamp(20px, 3vw, 44px); color: rgba(255,255,255,.82); font-weight: 900; }
-        .progress { position: fixed; left: 3vw; right: 3vw; bottom: 24px; z-index: 5; height: 6px; border-radius: 999px; overflow: hidden; background: rgba(255,255,255,.18); }
-        .progress span { display: block; height: 100%; width: 0%; background: linear-gradient(90deg,#ffe66d,#66d9ff,#ff6bd6); }
+        @media (max-width: 900px) {
+            .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+            .card { min-height: clamp(220px, 36vh, 340px); }
+        }
     </style>
 </head>
 <body>
@@ -1441,36 +1447,17 @@ const renderBossPage = () => {
         <div class="stars"></div>
         <main><header><div class="kicker">BOSS HUNT RECORD</div><h1>ボス討伐ボード</h1></header><section class="grid" id="bossGrid"></section></main>
     </section>
-    <section class="slide hint-slide" data-slide="hint1">
-        <div class="hint-box">
-            <div class="hint-title">ヒント 1</div>
-            <div class="hint-lines">
-                <div><span class="fruit-word apple">りんご</span>・<span class="fruit-word grape">ブドウ</span>・<span class="fruit-word banana">バナナ</span>を描いて攻撃！</div>
-                <div>小さく描いたり、大きく描いたりすると</div>
-                <div>別のフルーツが出てくるかも</div>
-            </div>
-        </div>
-    </section>
-    <section class="slide hint-slide alt" data-slide="hint2">
-        <div class="hint-box">
-            <div class="hint-title">ヒント 2</div>
-            <div class="hint-lines">
-                <div>8種類のフルーツを全部集めると</div>
-                <div>何かすごいことが起こるかも！</div>
-            </div>
-            <div class="hint-small">いろいろな大きさで描いてみよう</div>
-        </div>
-    </section>
-    <section class="slide vote" data-slide="vote"><div><h2>精密Lab.に<br>投票をお願いします！</h2><p>みんなの一票で応援してください</p></div></section>
-    <div class="progress"><span id="progressBar"></span></div>
     <script>
         const counts = ${countsJson};
         const labels = ${labelsJson};
         const order = ['easy', 'normal', 'hard', 'challenge'];
-        const slides = Array.from(document.querySelectorAll('.slide'));
-        let activeIndex = 0;
-        let slideStartedAt = Date.now();
-        const duration = 6000;
+        function digitClass(count) {
+            const digits = String(Math.max(0, Math.floor(Number(count) || 0))).length;
+            if (digits >= 6) return 'digits-6';
+            if (digits === 5) return 'digits-5';
+            if (digits === 4) return 'digits-4';
+            return '';
+        }
         function renderCounts() {
             const grid = document.getElementById('bossGrid');
             grid.innerHTML = '';
@@ -1478,17 +1465,9 @@ const renderBossPage = () => {
                 const count = Number(counts[difficulty] || 0);
                 const card = document.createElement('article');
                 card.className = 'card ' + difficulty;
-                card.innerHTML = '<div class="label">' + labels[difficulty] + '</div><div class="boss-wrap"><img src="/api/space-data/enemy/boss_enemy.png" alt="boss"></div><div><div class="count">' + count + '</div><div class="unit">体 討伐</div></div>';
+                card.innerHTML = '<div class="label">' + labels[difficulty] + '</div><div class="boss-wrap"><img src="/api/space-data/enemy/boss_enemy.png" alt="boss"></div><div class="count-wrap"><div class="count ' + digitClass(count) + '">' + count + '</div><div class="unit">体 討伐</div></div>';
                 grid.appendChild(card);
             });
-        }
-        function showSlide(nextIndex) {
-            slides[activeIndex].classList.remove('active');
-            slides[activeIndex].classList.add('leaving');
-            window.setTimeout(() => slides.forEach((slide) => slide.classList.remove('leaving')), 950);
-            activeIndex = nextIndex % slides.length;
-            slides[activeIndex].classList.add('active');
-            slideStartedAt = Date.now();
         }
         async function refresh() {
             try {
@@ -1499,16 +1478,9 @@ const renderBossPage = () => {
                 }
             } catch {}
         }
-        function tick() {
-            const elapsed = Date.now() - slideStartedAt;
-            document.getElementById('progressBar').style.width = Math.min(100, elapsed / duration * 100) + '%';
-            if (elapsed >= duration) showSlide(activeIndex + 1);
-            requestAnimationFrame(tick);
-        }
         renderCounts();
         refresh();
         setInterval(refresh, 1000);
-        requestAnimationFrame(tick);
     </script>
 </body>
 </html>`
@@ -1789,6 +1761,16 @@ const renderRemoteDrawPage = (draw2 = false) => `<!doctype html>
             z-index: 3;
             object-fit: contain;
         }
+        #swipeFruitPreview {
+            position: absolute;
+            inset: auto;
+            z-index: 18;
+            object-fit: contain;
+            pointer-events: none;
+            transform: translate(calc(var(--swipe-base-x, 0px) + var(--swipe-drag-x, 0px)), calc(var(--swipe-base-y, 0px) + var(--swipe-drag-y, 0px)));
+            transition: transform 0.34s cubic-bezier(0.18, 0.78, 0.28, 1), filter 0.2s ease;
+            filter: drop-shadow(0 12px 24px rgba(0, 0, 0, 0.2));
+        }
         #displayCanvas {
             z-index: 6;
             opacity: 1;
@@ -1869,6 +1851,38 @@ const renderRemoteDrawPage = (draw2 = false) => `<!doctype html>
             opacity: 1;
             touch-action: auto;
             border-radius: 3px;
+        }
+        .shape-match-panel {
+            background: rgba(12, 9, 5, 0.78);
+            border-radius: 8px;
+            padding: 6px 8px;
+            border: 1px solid rgba(255,255,255,0.09);
+            margin-top: 6px;
+        }
+        .shape-match-title {
+            font-family: monospace;
+            font-size: 10px;
+            font-weight: 700;
+            color: #ffd86b;
+            margin-bottom: 4px;
+        }
+        .shape-match-row {
+            display: flex;
+            justify-content: space-between;
+            gap: 8px;
+            font-family: monospace;
+            font-size: 10px;
+            color: rgba(255,255,255,0.72);
+            line-height: 1.55;
+        }
+        .shape-match-row.winner {
+            color: #fff27a;
+            font-weight: 800;
+        }
+        .shape-match-val {
+            color: #fff;
+            text-align: right;
+            flex-shrink: 0;
         }
         .timing-panel {
             background: rgba(12, 9, 5, 0.82);
@@ -2014,6 +2028,54 @@ const renderRemoteDrawPage = (draw2 = false) => `<!doctype html>
             opacity: 0.42;
             cursor: default;
         }
+        .swipe-shot-overlay {
+            position: absolute;
+            inset: 0;
+            z-index: 16;
+            display: none;
+            background: rgba(8, 10, 15, 0.22);
+            pointer-events: none;
+        }
+        .stage.draw2.swipe-shot-ready .swipe-shot-overlay {
+            display: block;
+        }
+        .swipe-shot-hint {
+            position: absolute;
+            left: 50%;
+            bottom: 118px;
+            transform: translateX(-50%);
+            border-radius: 999px;
+            padding: 11px 20px;
+            background: rgba(255, 255, 255, 0.78);
+            color: rgba(20, 24, 32, 0.88);
+            font-family: "Hiragino Sans", "Yu Gothic", sans-serif;
+            font-size: 16px;
+            font-weight: 900;
+            box-shadow: 0 16px 36px rgba(0, 0, 0, 0.14);
+            backdrop-filter: blur(8px);
+        }
+        .stage.draw2.swipe-shot-ready #stagePreview,
+        .stage.draw2.swipe-shot-ready #staticFruitPreview {
+            opacity: 0;
+        }
+        .stage.draw2.swipe-shot-ready #swipeFruitPreview:not([hidden]) {
+            animation: swipeFruitGlow 0.76s ease-in-out infinite;
+        }
+        .stage.draw2.swipe-shot-local-fly #swipeFruitPreview:not([hidden]) {
+            filter: drop-shadow(0 16px 28px rgba(0, 0, 0, 0.26)) drop-shadow(0 0 18px rgba(255, 255, 255, 0.9));
+        }
+        @keyframes swipeFruitGlow {
+            0%, 100% { filter: drop-shadow(0 12px 24px rgba(0, 0, 0, 0.2)) drop-shadow(0 0 0 rgba(255,255,255,0)); }
+            50% { filter: drop-shadow(0 14px 28px rgba(0, 0, 0, 0.22)) drop-shadow(0 0 18px rgba(255,255,255,0.9)); }
+        }
+        .stage.draw2.swipe-dragging #swipeFruitPreview {
+            animation: none !important;
+            transition: none !important;
+        }
+        .stage.draw2.swipe-dragging .swipe-shot-hint {
+            opacity: 0;
+            transition: opacity 0.15s ease;
+        }
        .stage.draw2 #productionModeToggleButton,
         .stage.draw2 #nonAlphaModeToggleButton {
             display: none !important;
@@ -2086,6 +2148,15 @@ const renderRemoteDrawPage = (draw2 = false) => `<!doctype html>
         }
         .stage.draw2.fever-active .fruit-card-row {
             animation: feverCardRowPulse 0.48s ease-in-out infinite;
+        }
+        .stage.draw2.tutorial-card-highlight .fruit-card-row {
+            z-index: 36;
+            animation: feverCardRowPulse 0.48s ease-in-out infinite;
+            filter: drop-shadow(0 0 20px rgba(255, 242, 122, 0.82));
+        }
+        .stage.draw2.tutorial-card-highlight .fruit-card {
+            border-color: rgba(255, 242, 122, 0.92);
+            box-shadow: 0 0 0 3px rgba(255, 242, 122, 0.24), 0 0 24px rgba(255, 242, 122, 0.58);
         }
         @keyframes feverCardRowPulse {
             0%, 100% { transform: translateX(-50%) scale(1); }
@@ -2184,6 +2255,100 @@ const renderRemoteDrawPage = (draw2 = false) => `<!doctype html>
         .stage.draw2 .judge-prob-meta,
         .stage.draw2 .judge-prob-status {
             display: none;
+        }
+        /* Temporary: keep probability/debug logic alive, but hide the draw2 debug UI. */
+        .stage.draw2 #judgeProbPanel,
+        .stage.draw2 #shapeMatchPanel,
+        .stage.draw2 #shapeMatchResultPanel {
+            display: none !important;
+        }
+        .shape-match-result-panel {
+            position: absolute;
+            top: 136px;
+            right: 16px;
+            z-index: 16;
+            display: none;
+            width: min(240px, 32vw);
+            min-width: 188px;
+            padding: 10px 12px;
+            border-radius: 12px;
+            background: rgba(10, 12, 16, 0.28);
+            color: rgba(24, 26, 30, 0.78);
+            box-shadow: none;
+            backdrop-filter: blur(3px);
+            pointer-events: none;
+        }
+        .stage.draw2 .shape-match-result-panel:not([hidden]) {
+            display: block;
+        }
+        .shape-match-result-winner {
+            color: rgba(24, 26, 30, 0.88);
+            font-family: "Hiragino Sans", "Yu Gothic", sans-serif;
+            font-size: 12px;
+            font-weight: 900;
+            margin-bottom: 7px;
+        }
+        .shape-match-result-row {
+            display: grid;
+            grid-template-columns: 42px 1fr 46px;
+            align-items: center;
+            gap: 7px;
+            font-family: "Hiragino Sans", "Yu Gothic", sans-serif;
+            font-size: 11px;
+            font-weight: 800;
+            line-height: 1.45;
+            color: rgba(24, 26, 30, 0.58);
+        }
+        .shape-match-result-row + .shape-match-result-row {
+            margin-top: 5px;
+        }
+        .shape-match-result-row.winner {
+            color: rgba(28, 40, 55, 0.94);
+        }
+        .shape-match-result-track {
+            height: 6px;
+            border-radius: 999px;
+            background: rgba(24, 26, 30, 0.14);
+            overflow: hidden;
+        }
+        .shape-match-result-fill {
+            height: 100%;
+            border-radius: inherit;
+            background: rgba(255, 255, 255, 0.56);
+            transition: width 0.18s ease;
+        }
+        .shape-match-result-row.winner .shape-match-result-fill {
+            background: linear-gradient(90deg, rgba(255, 118, 154, 0.88), rgba(255, 216, 102, 0.88));
+            box-shadow: 0 0 12px rgba(255, 185, 96, 0.52);
+        }
+        .shape-match-result-value {
+            text-align: right;
+            font-variant-numeric: tabular-nums;
+        }
+        .lemon-point-debug {
+            margin-top: 8px;
+            padding-top: 8px;
+            border-top: 1px solid rgba(24, 26, 30, 0.12);
+            font-family: monospace;
+            font-size: 10px;
+            color: rgba(24, 26, 30, 0.72);
+        }
+        .lemon-point-debug svg {
+            display: block;
+            width: 96px;
+            height: 96px;
+            margin-top: 5px;
+            border-radius: 8px;
+            background: rgba(255, 255, 255, 0.24);
+            border: 1px solid rgba(24, 26, 30, 0.10);
+        }
+        .lemon-point-debug .candidate {
+            fill: rgba(37, 99, 235, 0.76);
+        }
+        .lemon-point-debug .selected {
+            fill: rgba(239, 68, 68, 0.95);
+            stroke: rgba(255, 255, 255, 0.9);
+            stroke-width: 1.8;
         }
         .meter-label-line {
             display: flex;
@@ -2548,21 +2713,62 @@ const renderRemoteDrawPage = (draw2 = false) => `<!doctype html>
             border-color: rgba(126, 226, 255, 0.26);
         }
         .flow-overlay.phase-difficulty .flow-actions {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(170px, 1fr));
             align-items: stretch;
-            gap: 18px;
+            gap: 16px;
+            width: min(760px, 86vw);
+            margin-left: auto;
+            margin-right: auto;
         }
         .flow-overlay.phase-difficulty .flow-button {
-            min-width: min(210px, 26vw);
-            min-height: 128px;
-            border-radius: 24px;
-            background: rgba(255,255,255,0.12);
-            color: #fff8d7;
+            width: 100%;
+            min-width: 0;
+            min-height: 118px;
+            border-radius: 22px;
+            color: #fff;
             border: 1px solid rgba(255,255,255,0.18);
-            box-shadow: 0 20px 46px rgba(0,0,0,0.24);
+            box-shadow: 0 18px 42px rgba(0,0,0,0.26);
+            text-shadow: 0 2px 10px rgba(0,0,0,0.28);
         }
-        .flow-overlay.phase-difficulty .flow-button:not(.secondary) {
-            background: linear-gradient(180deg, rgba(255, 242, 122, 0.96), rgba(255, 176, 46, 0.96));
-            color: #2f2113;
+        .flow-overlay.phase-difficulty .flow-button.easy,
+        .flow-overlay.phase-difficulty .flow-button.normal {
+            box-shadow: 0 0 0 3px rgba(255,255,255,0.18), 0 22px 52px rgba(0,0,0,0.30);
+            transform: scale(1.03);
+        }
+        .flow-overlay.phase-difficulty .flow-button.easy {
+            background: linear-gradient(180deg, #4ade80, #15803d);
+        }
+        .flow-overlay.phase-difficulty .flow-button.normal {
+            background: linear-gradient(180deg, #60a5fa, #1d4ed8);
+        }
+        .flow-overlay.phase-difficulty .flow-button.hard {
+            background: linear-gradient(180deg, #fb923c, #c2410c);
+        }
+        .flow-overlay.phase-difficulty .flow-button.challenge {
+            background: linear-gradient(180deg, #c084fc, #7e22ce);
+        }
+        .flow-overlay.phase-difficulty .flow-button::after {
+            display: block;
+            margin-top: 8px;
+            font-size: clamp(12px, 1.6vw, 16px);
+            font-weight: 900;
+            opacity: 0.82;
+        }
+        .flow-overlay.phase-difficulty .flow-button.easy::after,
+        .flow-overlay.phase-difficulty .flow-button.normal::after {
+            content: "おすすめ";
+        }
+        .flow-overlay.phase-difficulty .flow-button.hard::after {
+            content: "なれてきた人向け";
+        }
+        .flow-overlay.phase-difficulty .flow-button.challenge::after {
+            content: "上級チャレンジ";
+        }
+        @media (max-width: 680px) {
+            .flow-overlay.phase-difficulty .flow-actions {
+                grid-template-columns: 1fr;
+            }
         }
         .flow-overlay.phase-tutorial {
             align-items: flex-start;
@@ -2581,6 +2787,9 @@ const renderRemoteDrawPage = (draw2 = false) => `<!doctype html>
             background:
                 radial-gradient(circle at calc(100% - 104px) calc(100% - 66px), transparent 0 106px, rgba(0, 0, 0, 0.68) 128px),
                 rgba(0, 0, 0, 0.12);
+        }
+        .flow-overlay.phase-tutorial.tutorial-direct-step::before {
+            background: rgba(0, 0, 0, 0.10);
         }
         .flow-overlay.phase-tutorial .flow-panel {
             pointer-events: auto;
@@ -2603,6 +2812,9 @@ const renderRemoteDrawPage = (draw2 = false) => `<!doctype html>
         .flow-overlay.phase-tutorial.tutorial-fire-step .flow-title {
             color: #8bd0ff;
         }
+        .flow-overlay.phase-tutorial.tutorial-direct-step .flow-title {
+            color: #fff27a;
+        }
         .flow-overlay.phase-tutorial .flow-copy {
             font-size: clamp(14px, 2vw, 20px);
             line-height: 1.42;
@@ -2618,13 +2830,126 @@ const renderRemoteDrawPage = (draw2 = false) => `<!doctype html>
             font-size: clamp(14px, 2vw, 20px);
         }
         .flow-overlay.phase-tutorial_done {
-            background:
-                radial-gradient(circle at 50% 18%, rgba(255, 242, 122, 0.38), transparent 28%),
-                linear-gradient(145deg, rgba(12, 20, 34, 0.86), rgba(18, 44, 42, 0.9));
+            align-items: flex-start;
+            justify-content: center;
+            padding-top: 114px;
+            background: transparent;
+            backdrop-filter: none;
+            pointer-events: none;
+        }
+        .flow-overlay.phase-tutorial_done .flow-panel {
+            pointer-events: auto;
+            width: min(560px, 86vw);
+            padding: 18px 22px;
+            border-radius: 20px;
+            background: rgba(255, 255, 255, 0.82);
+            border: 1px solid rgba(255, 211, 72, 0.52);
+            box-shadow: 0 20px 52px rgba(40, 34, 20, 0.16);
+            color: #2f2714;
+            position: relative;
         }
         .flow-overlay.phase-tutorial_done .flow-title {
+            color: #2f2714;
+            font-size: clamp(25px, 4vw, 38px);
+            line-height: 1.15;
+        }
+        .flow-overlay.phase-tutorial_done .flow-kicker {
+            color: rgba(47, 39, 20, 0.58);
+        }
+        .flow-overlay.phase-tutorial_done .flow-copy {
+            color: rgba(47, 39, 20, 0.72);
+            font-size: clamp(15px, 2.2vw, 20px);
+        }
+        .flow-overlay.phase-tutorial_done .flow-actions {
+            margin-top: 18px;
+        }
+        .flow-overlay.phase-tutorial_done .flow-button {
+            min-width: 138px;
+            padding: 12px 22px;
+            font-size: clamp(16px, 2.4vw, 22px);
+        }
+        .flow-overlay.phase-tutorial_done .flow-panel::before {
+            content: "";
+            position: absolute;
+            left: 50%;
+            top: -54px;
+            width: 4px;
+            height: 42px;
+            border-radius: 999px;
+            background: linear-gradient(180deg, rgba(255, 217, 74, 0), rgba(255, 190, 40, 0.95));
+            box-shadow: 0 0 18px rgba(255, 205, 52, 0.72);
+        }
+        .flow-overlay.phase-tutorial_done .flow-panel::after {
+            content: "";
+            position: absolute;
+            left: calc(50% - 9px);
+            top: -18px;
+            width: 18px;
+            height: 18px;
+            border-right: 4px solid rgba(255, 190, 40, 0.95);
+            border-bottom: 4px solid rgba(255, 190, 40, 0.95);
+            transform: rotate(45deg);
+            filter: drop-shadow(0 0 10px rgba(255, 205, 52, 0.72));
+        }
+        .flow-overlay.phase-tutorial_done.start-ready {
+            align-items: center;
+            padding-top: 36px;
+            background:
+                radial-gradient(circle at 50% 18%, rgba(255, 242, 122, 0.30), transparent 28%),
+                linear-gradient(145deg, rgba(12, 20, 34, 0.78), rgba(18, 44, 42, 0.84));
+            backdrop-filter: blur(4px);
+            pointer-events: auto;
+        }
+        .flow-overlay.phase-tutorial_done.start-ready .flow-panel {
+            width: min(760px, 88vw);
+            padding: clamp(28px, 5vw, 54px);
+            border-radius: 28px;
+            background: rgba(255, 255, 255, 0.12);
+            border: 1px solid rgba(255, 255, 255, 0.18);
+            box-shadow: 0 28px 90px rgba(0, 0, 0, 0.34);
+            color: #fff8d7;
+        }
+        .flow-overlay.phase-tutorial_done.start-ready .flow-panel::before,
+        .flow-overlay.phase-tutorial_done.start-ready .flow-panel::after {
+            display: none;
+        }
+        .flow-overlay.phase-tutorial_done.start-ready .flow-title {
             color: #fff27a;
             font-size: clamp(50px, 9vw, 96px);
+        }
+        .flow-overlay.phase-tutorial_done.start-ready .flow-kicker,
+        .flow-overlay.phase-tutorial_done.start-ready .flow-copy {
+            color: inherit;
+        }
+        .tutorial-fever-guide {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: clamp(6px, 1.4vw, 12px);
+            width: min(560px, 76vw);
+            margin: 22px auto 0;
+        }
+        .tutorial-fever-card {
+            width: clamp(42px, 7.2vw, 72px);
+            height: clamp(42px, 7.2vw, 72px);
+            border-radius: 12px;
+            background: rgba(255, 255, 255, 0.16);
+            border: 1px solid rgba(255, 242, 122, 0.42);
+            display: grid;
+            place-items: center;
+            animation: tutorialCardPop 1.05s ease-in-out infinite;
+            animation-delay: calc(var(--card-index) * 0.08s);
+            flex: 0 0 auto;
+        }
+        .tutorial-fever-card img {
+            width: 78%;
+            height: 78%;
+            object-fit: contain;
+            filter: drop-shadow(0 0 12px rgba(255, 242, 122, 0.45));
+        }
+        @keyframes tutorialCardPop {
+            0%, 100% { transform: translateY(0) scale(1); }
+            50% { transform: translateY(-5px) scale(1.08); }
         }
         .stage.draw2.tutorial-fire-step #fireButton {
             z-index: 34;
@@ -2732,9 +3057,13 @@ const renderRemoteDrawPage = (draw2 = false) => `<!doctype html>
     <div class="stage${draw2 ? ' draw2 production-mode' : ''}" id="mainStage">
         <img id="stagePreview" alt="generated fruit" hidden>
         <img id="staticFruitPreview" alt="static fruit" hidden>
+        <img id="swipeFruitPreview" alt="swipe fruit" hidden>
         <canvas id="stageCanvas" width="${REMOTE_DRAW_PROCESSING_WIDTH}" height="${REMOTE_DRAW_PROCESSING_HEIGHT}"></canvas>
         <canvas id="displayCanvas" width="${REMOTE_DRAW_PROCESSING_WIDTH}" height="${REMOTE_DRAW_PROCESSING_HEIGHT}"></canvas>
         <div id="fruitCardRow" class="fruit-card-row"></div>
+        <div id="swipeShotOverlay" class="swipe-shot-overlay">
+            <div class="swipe-shot-hint">フルーツを上にスワイプ</div>
+        </div>
         <div id="cropOverlay" class="crop-overlay" hidden></div>
         <div class="preview-stack">
             <div class="preview-card">
@@ -2765,6 +3094,10 @@ const renderRemoteDrawPage = (draw2 = false) => `<!doctype html>
                     <div class="timing-panel-title">処理時間 (ms)</div>
                     <div id="timingRows"></div>
                 </div>
+                <div id="shapeMatchPanel" class="shape-match-panel" hidden>
+                    <div class="shape-match-title">小フルーツ形状一致度</div>
+                    <div id="shapeMatchRows"></div>
+                </div>
             </div>
         </div>
         <button id="appleRadialVarianceSkipToggleButton" class="mode-toggle" type="button" style="bottom:432px;">形状スキップ: OFF</button>
@@ -2792,6 +3125,10 @@ const renderRemoteDrawPage = (draw2 = false) => `<!doctype html>
             <div class="judge-prob-meta" id="bananaInkStatus">バナナ線量: --</div>
             <div class="judge-prob-status" id="judgeProbStatus">待機中</div>
         </div>
+        <div id="shapeMatchResultPanel" class="shape-match-result-panel" hidden>
+            <div id="shapeMatchResultWinner" class="shape-match-result-winner">一致: --</div>
+            <div id="shapeMatchResultRows"></div>
+        </div>
         <div id="gameResultOverlay" class="result-overlay"></div>
         <div id="gameFlowOverlay" class="flow-overlay"></div>
     </div>
@@ -2803,6 +3140,7 @@ const renderRemoteDrawPage = (draw2 = false) => `<!doctype html>
             processingHeight: ${REMOTE_DRAW_PROCESSING_HEIGHT},
             realtimeIntervalMs: 50,
             desiredDisplayLineWidth: 5.7,
+            spaceDataUrl: 'http://127.0.0.1:${GAME_CONTROL_PORT}/api/space-data',
         };
         const DRAW2_MODE = ${draw2 ? 'true' : 'false'};
         const sessionId = (() => {
@@ -2845,6 +3183,7 @@ const renderRemoteDrawPage = (draw2 = false) => `<!doctype html>
         const displayCtx = displayCanvas.getContext('2d');
         const preview = document.getElementById('stagePreview');
         const staticFruitPreview = document.getElementById('staticFruitPreview');
+        const swipeFruitPreview = document.getElementById('swipeFruitPreview');
         const borderPreview = document.getElementById('borderPreview');
         const borderPreviewPlaceholder = document.getElementById('borderPreviewPlaceholder');
         const cleanedBorderPreview = document.getElementById('cleanedBorderPreview');
@@ -2853,6 +3192,7 @@ const renderRemoteDrawPage = (draw2 = false) => `<!doctype html>
         const structurePreviewPlaceholder = document.getElementById('structurePreviewPlaceholder');
         const cropOverlay = document.getElementById('cropOverlay');
         const fruitCardRow = document.getElementById('fruitCardRow');
+        const swipeShotOverlay = document.getElementById('swipeShotOverlay');
         const resultOverlay = document.getElementById('gameResultOverlay');
         const gameFlowOverlay = document.getElementById('gameFlowOverlay');
         const variantToggleButton = document.getElementById('variantToggleButton');
@@ -2869,6 +3209,11 @@ const renderRemoteDrawPage = (draw2 = false) => `<!doctype html>
         const centroidOverlay = document.getElementById('centroidOverlay');
         const timingPanel = document.getElementById('timingPanel');
         const timingRows = document.getElementById('timingRows');
+        const shapeMatchPanel = document.getElementById('shapeMatchPanel');
+        const shapeMatchRows = document.getElementById('shapeMatchRows');
+        const shapeMatchResultPanel = document.getElementById('shapeMatchResultPanel');
+        const shapeMatchResultWinner = document.getElementById('shapeMatchResultWinner');
+        const shapeMatchResultRows = document.getElementById('shapeMatchResultRows');
         const mainStage = document.getElementById('mainStage');
         const productionModeToggleButton = document.getElementById('productionModeToggleButton');
         const clearButton = document.getElementById('clearButton');
@@ -2885,6 +3230,17 @@ const renderRemoteDrawPage = (draw2 = false) => `<!doctype html>
         let judgePollingTimer = null;
         let judgeRequestInFlight = false;
         let lastPredictionFruitName = null;
+        let shapeMatchedStaticFruit = null;
+        let lastShapeMatchResult = null;
+        let pendingSwipeShot = null;
+        let swipeStartPoint = null;
+        let swipeDragStartClient = null;
+        let swipeFruitOffset = { x: 0, y: 0 };
+        let swipePreviewSerial = 0;
+        let swipeInertiaFrame = null;
+        let directSwipeCandidate = null;
+        let latestPreviewAsset = null;
+        let suppressDirectSwipeUntilNextStroke = false;
         let drawing = false;
         let drawingSuspendedByGuide = false;
         let canvasDirty = false;
@@ -2903,15 +3259,23 @@ const renderRemoteDrawPage = (draw2 = false) => `<!doctype html>
         let productionSelectedVariant = null;
         let productionSelectedAt = 0;
         let lastNonSkippedApplePayload = null;
-        let selectedSmallStaticFruit = null;
-        const FRUIT_CARD_TYPES = ['berry', 'lemon', 'orange', 'peach', 'apple', 'banana', 'grape', 'suika'];
+        const FRUIT_CARD_TYPES = ['berry', 'lemon', 'peach', 'apple', 'banana', 'grape', 'dorian'];
+        const FEVER_STATIC_IMAGE_PATHS = {
+            berry: 'other_fruit/berry.png',
+            lemon: 'other_fruit/Lemon.png',
+            peach: 'other_fruit/peach.png',
+            dorian: 'other_fruit/dorian.png',
+        };
+        const FEVER_STATIC_FRUIT_SIZE = { berry: 45, lemon: 50, peach: 55, dorian: 80 };
         const fruitCardState = new Set();
         const shotHistory = [];
         let feverActive = false;
         let feverTimer = null;
         let feverEndTimer = null;
+        let feverShotIndex = 0;
         let gameFlowPhase = 'playing';
         let lastGameFlowSignal = null;
+        let tutorialDoneStep = 'cards';
         let tutorialStep = 'draw';
         let tutorialGuideImage = null;
         let tutorialGuidePoints = null;
@@ -2928,9 +3292,9 @@ const renderRemoteDrawPage = (draw2 = false) => `<!doctype html>
         };
         let realtimeIntervalMs = CONFIG.realtimeIntervalMs;
         let lastRealtimePredictAt = 0;
-        const STATIC_BERRY_SIZE_THRESHOLD = ${BERRY_SIZE_THRESHOLD};
-        const STATIC_SUIKA_SIZE_THRESHOLD = ${SUIKA_SIZE_THRESHOLD};
-        const SMALL_STATIC_FRUITS = ['berry', 'lemon', 'orange', 'peach'];
+        const STATIC_DORIAN_SIZE_THRESHOLD = ${DORIAN_SIZE_THRESHOLD};
+        const STATIC_SMALL_FRUIT_SIZE_THRESHOLD = 70;
+        const SMALL_STATIC_FRUITS = ['berry', 'lemon', 'peach'];
         const BANANA_MIN_INK_PIXELS = 500;
         const JUDGE_ENTER_THRESHOLD = 0.7;
         const JUDGE_RELEASE_THRESHOLD = 0.4;
@@ -2947,9 +3311,8 @@ const renderRemoteDrawPage = (draw2 = false) => `<!doctype html>
                 grape: '/api/voice/fruit/発射/ブドウ発射.mp3',
                 berry: '/api/voice/fruit/発射/いちご発射.mp3',
                 lemon: '/api/voice/fruit/発射/レモン発射.mp3',
-                orange: '/api/voice/fruit/発射/みかん発射.mp3',
                 peach: '/api/voice/fruit/発射/モモ発射.mp3',
-                suika: '/api/voice/fruit/発射/スイカ発射.mp3',
+                dorian: '/api/voice/fruit/発射/スイカ発射.mp3',
             },
         };
         const audioCache = new Map();
@@ -3165,6 +3528,7 @@ const renderRemoteDrawPage = (draw2 = false) => `<!doctype html>
             lastPredictionFruitName = null;
             productionSelectedVariant = null;
             productionSelectedAt = 0;
+            shapeMatchedStaticFruit = null;
             updateJudgeProbDisplay();
             updateNonAlphaModeToggleButton();
             judgePollingTimer = window.setInterval(function() {
@@ -3187,6 +3551,7 @@ const renderRemoteDrawPage = (draw2 = false) => `<!doctype html>
             latestJudgeScores = null;
             productionSelectedVariant = null;
             productionSelectedAt = 0;
+            shapeMatchedStaticFruit = null;
             updateJudgeProbDisplay();
             updateVariantToggleButton();
             updateBananaPostprocessToggleButton();
@@ -3247,6 +3612,122 @@ const renderRemoteDrawPage = (draw2 = false) => `<!doctype html>
                 row.appendChild(label);
                 row.appendChild(val);
                 timingRows.appendChild(row);
+            }
+        }
+        function labelForSmallFruit(fruitName) {
+            if (fruitName === 'berry') return 'いちご';
+            if (fruitName === 'lemon') return 'レモン';
+            if (fruitName === 'peach') return '桃';
+            return fruitName || '--';
+        }
+        function updateShapeMatchPanel(result) {
+            if (!shapeMatchPanel || !shapeMatchRows) return;
+            if (!result || !result.rule_scores) {
+                lastShapeMatchResult = null;
+                shapeMatchPanel.hidden = true;
+                shapeMatchRows.innerHTML = '';
+                if (shapeMatchResultPanel && shapeMatchResultRows) {
+                    shapeMatchResultPanel.hidden = true;
+                    shapeMatchResultRows.innerHTML = '';
+                    if (shapeMatchResultWinner) shapeMatchResultWinner.textContent = '一致: --';
+                }
+                return;
+            }
+            lastShapeMatchResult = result;
+            shapeMatchPanel.hidden = false;
+            shapeMatchRows.innerHTML = '';
+            if (shapeMatchResultPanel && shapeMatchResultRows) {
+                shapeMatchResultPanel.hidden = false;
+                shapeMatchResultRows.innerHTML = '';
+                if (shapeMatchResultWinner) {
+                    shapeMatchResultWinner.textContent = '閉曲線一致: ' + labelForSmallFruit(result.rule_best || result.best);
+                }
+            }
+            function appendRows(target, sourceScores, prefix, rowClassName) {
+                const title = document.createElement('div');
+                title.className = rowClassName === 'shape-match-result-row' ? 'shape-match-result-winner' : 'shape-match-title';
+                title.textContent = prefix;
+                target.appendChild(title);
+                ['berry', 'lemon', 'peach'].forEach(function(type) {
+                    const item = sourceScores[type] || {};
+                    const score = Number(item.score || 0);
+                    const pct = Math.max(0, Math.min(100, score * 100));
+                    const winner = (result.rule_best || result.best) === type;
+                    if (rowClassName === 'shape-match-row') {
+                        const row = document.createElement('div');
+                        row.className = 'shape-match-row' + (winner ? ' winner' : '');
+                        const label = document.createElement('span');
+                        label.textContent = labelForSmallFruit(type);
+                        const value = document.createElement('span');
+                        value.className = 'shape-match-val';
+                        value.textContent = pct.toFixed(1) + '%';
+                        row.appendChild(label);
+                        row.appendChild(value);
+                        target.appendChild(row);
+                        return;
+                    }
+                    const visibleRow = document.createElement('div');
+                    visibleRow.className = 'shape-match-result-row' + (winner ? ' winner' : '');
+                    const visibleLabel = document.createElement('span');
+                    visibleLabel.textContent = labelForSmallFruit(type);
+                    const track = document.createElement('div');
+                    track.className = 'shape-match-result-track';
+                    const fill = document.createElement('div');
+                    fill.className = 'shape-match-result-fill';
+                    fill.style.width = pct.toFixed(1) + '%';
+                    const visibleValue = document.createElement('span');
+                    visibleValue.className = 'shape-match-result-value';
+                    visibleValue.textContent = pct.toFixed(1) + '%';
+                    track.appendChild(fill);
+                    visibleRow.appendChild(visibleLabel);
+                    visibleRow.appendChild(track);
+                    visibleRow.appendChild(visibleValue);
+                    target.appendChild(visibleRow);
+                });
+            }
+            function appendLemonPointDebug(target) {
+                const rule = result.rule || {};
+                const components = Array.isArray(rule.components) ? rule.components : [];
+                const top = components[0] || {};
+                const candidates = Array.isArray(top.lemon_point_candidates) ? top.lemon_point_candidates : [];
+                const selected = Array.isArray(top.lemon_selected_points) ? top.lemon_selected_points : [];
+                const debug = document.createElement('div');
+                debug.className = 'lemon-point-debug';
+                const text = document.createElement('div');
+                text.textContent = 'レモン頂点候補: ' + candidates.length + ' / 採用: ' + selected.length;
+                debug.appendChild(text);
+                const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+                svg.setAttribute('viewBox', '0 0 128 128');
+                svg.setAttribute('aria-label', 'lemon point debug');
+                candidates.forEach(function(point) {
+                    const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+                    circle.setAttribute('class', 'candidate');
+                    circle.setAttribute('cx', String(Math.max(0, Math.min(128, Number(point.x || 0)))));
+                    circle.setAttribute('cy', String(Math.max(0, Math.min(128, Number(point.y || 0)))));
+                    circle.setAttribute('r', '2.4');
+                    const title = document.createElementNS('http://www.w3.org/2000/svg', 'title');
+                    title.textContent = '(' + Math.round(Number(point.x || 0)) + ', ' + Math.round(Number(point.y || 0)) + ') angle=' + Number(point.angle || 0).toFixed(1);
+                    circle.appendChild(title);
+                    svg.appendChild(circle);
+                });
+                selected.forEach(function(point) {
+                    const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+                    circle.setAttribute('class', 'selected');
+                    circle.setAttribute('cx', String(Math.max(0, Math.min(128, Number(point.x || 0)))));
+                    circle.setAttribute('cy', String(Math.max(0, Math.min(128, Number(point.y || 0)))));
+                    circle.setAttribute('r', '4.2');
+                    const title = document.createElementNS('http://www.w3.org/2000/svg', 'title');
+                    title.textContent = 'selected (' + Math.round(Number(point.x || 0)) + ', ' + Math.round(Number(point.y || 0)) + ') angle=' + Number(point.angle || 0).toFixed(1);
+                    circle.appendChild(title);
+                    svg.appendChild(circle);
+                });
+                debug.appendChild(svg);
+                target.appendChild(debug);
+            }
+            appendRows(shapeMatchRows, result.rule_scores || {}, '閉曲線判定', 'shape-match-row');
+            if (shapeMatchResultRows) {
+                appendRows(shapeMatchResultRows, result.rule_scores || {}, '閉曲線判定', 'shape-match-result-row');
+                appendLemonPointDebug(shapeMatchResultRows);
             }
         }
         function drawCentroidOverlay() {
@@ -3342,6 +3823,7 @@ const renderRemoteDrawPage = (draw2 = false) => `<!doctype html>
             preview.removeAttribute('src');
             staticFruitPreview.hidden = true;
             staticFruitPreview.removeAttribute('src');
+            latestPreviewAsset = null;
             borderPreview.hidden = true;
             borderPreview.removeAttribute('src');
             borderPreviewPlaceholder.hidden = false;
@@ -3355,6 +3837,7 @@ const renderRemoteDrawPage = (draw2 = false) => `<!doctype html>
             drawCentroidOverlay();
             timingPanel.hidden = true;
             timingRows.innerHTML = '';
+            updateShapeMatchPanel(null);
             colorPreviewActive = false;
         }
         function updateCropOverlay(crop) {
@@ -3387,30 +3870,90 @@ const renderRemoteDrawPage = (draw2 = false) => `<!doctype html>
         }
         function countInkPixels() {
             const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-            const pixels = imageData.data;
-            let count = 0;
-            for (let index = 0; index < pixels.length; index += 4) {
-                if (isInkAt(index, pixels)) count += 1;
-            }
-            return count;
+            const analysis = getRelevantInkAnalysis(imageData);
+            return analysis ? analysis.inkPixels : 0;
         }
-        function getInkBounds() {
-            const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        function getRectDistance(a, b) {
+            const dx = Math.max(0, Math.max(a.left - b.right, b.left - a.right));
+            const dy = Math.max(0, Math.max(a.top - b.bottom, b.top - a.bottom));
+            return Math.sqrt(dx * dx + dy * dy);
+        }
+        function getRelevantInkAnalysis(imageData) {
             const pixels = imageData.data;
-            let minX = canvas.width;
-            let minY = canvas.height;
-            let maxX = -1;
-            let maxY = -1;
-            for (let y = 0; y < canvas.height; y += 1) {
-                for (let x = 0; x < canvas.width; x += 1) {
-                    const index = (y * canvas.width + x) * 4;
-                    if (!isInkAt(index, pixels)) continue;
-                    minX = Math.min(minX, x);
-                    minY = Math.min(minY, y);
-                    maxX = Math.max(maxX, x);
-                    maxY = Math.max(maxY, y);
+            const width = imageData.width;
+            const height = imageData.height;
+            const visited = new Uint8Array(width * height);
+            const components = [];
+            const queue = [];
+            for (let y = 0; y < height; y += 1) {
+                for (let x = 0; x < width; x += 1) {
+                    const start = y * width + x;
+                    if (visited[start]) continue;
+                    visited[start] = 1;
+                    const pixelIndex = start * 4;
+                    if (!isInkAt(pixelIndex, pixels)) continue;
+                    let head = 0;
+                    let count = 0;
+                    let minX = x;
+                    let minY = y;
+                    let maxX = x;
+                    let maxY = y;
+                    queue.length = 0;
+                    queue.push(start);
+                    while (head < queue.length) {
+                        const current = queue[head];
+                        head += 1;
+                        const cx = current % width;
+                        const cy = Math.floor(current / width);
+                        count += 1;
+                        minX = Math.min(minX, cx);
+                        minY = Math.min(minY, cy);
+                        maxX = Math.max(maxX, cx);
+                        maxY = Math.max(maxY, cy);
+                        for (let oy = -1; oy <= 1; oy += 1) {
+                            for (let ox = -1; ox <= 1; ox += 1) {
+                                if (ox === 0 && oy === 0) continue;
+                                const nx = cx + ox;
+                                const ny = cy + oy;
+                                if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue;
+                                const next = ny * width + nx;
+                                if (visited[next]) continue;
+                                visited[next] = 1;
+                                if (isInkAt(next * 4, pixels)) queue.push(next);
+                            }
+                        }
+                    }
+                    components.push({
+                        count,
+                        left: minX,
+                        top: minY,
+                        right: maxX + 1,
+                        bottom: maxY + 1,
+                        width: maxX - minX + 1,
+                        height: maxY - minY + 1,
+                    });
                 }
             }
+            if (components.length === 0) return null;
+            components.sort(function(a, b) { return b.count - a.count; });
+            const largest = components[0];
+            const threshold = Math.max(largest.width, largest.height, 1);
+            const relevant = components.filter(function(component, index) {
+                if (index === 0) return true;
+                return getRectDistance(component, largest) < threshold;
+            });
+            let minX = width;
+            let minY = height;
+            let maxX = -1;
+            let maxY = -1;
+            let inkPixels = 0;
+            relevant.forEach(function(component) {
+                minX = Math.min(minX, component.left);
+                minY = Math.min(minY, component.top);
+                maxX = Math.max(maxX, component.right - 1);
+                maxY = Math.max(maxY, component.bottom - 1);
+                inkPixels += component.count;
+            });
             if (maxX < 0 || maxY < 0) return null;
             return {
                 left: minX,
@@ -3419,6 +3962,23 @@ const renderRemoteDrawPage = (draw2 = false) => `<!doctype html>
                 bottom: maxY + 1,
                 width: maxX - minX + 1,
                 height: maxY - minY + 1,
+                inkPixels,
+                componentCount: components.length,
+                relevantComponentCount: relevant.length,
+                ignoredComponentCount: components.length - relevant.length,
+            };
+        }
+        function getInkBounds() {
+            const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+            const analysis = getRelevantInkAnalysis(imageData);
+            if (!analysis) return null;
+            return {
+                left: analysis.left,
+                top: analysis.top,
+                right: analysis.right,
+                bottom: analysis.bottom,
+                width: analysis.width,
+                height: analysis.height,
             };
         }
         function computeGeneratedCropRect(bbox) {
@@ -3445,17 +4005,11 @@ const renderRemoteDrawPage = (draw2 = false) => `<!doctype html>
         }
         function getForcedStaticFruitType(bbox) {
             const maxDim = Math.max(bbox.width, bbox.height);
-            if (maxDim <= STATIC_BERRY_SIZE_THRESHOLD) {
-                if (!selectedSmallStaticFruit) {
-                    selectedSmallStaticFruit = SMALL_STATIC_FRUITS[Math.floor(Math.random() * SMALL_STATIC_FRUITS.length)];
-                }
-                return selectedSmallStaticFruit;
-            }
-            if (maxDim >= STATIC_SUIKA_SIZE_THRESHOLD) return 'suika';
+            if (maxDim >= STATIC_DORIAN_SIZE_THRESHOLD) return 'dorian';
             return null;
         }
         function isStaticFruitName(fruitName) {
-            return fruitName === 'suika' || SMALL_STATIC_FRUITS.indexOf(fruitName) >= 0;
+            return fruitName === 'dorian' || SMALL_STATIC_FRUITS.indexOf(fruitName) >= 0;
         }
         function normalizeFruitCardType(fruitName) {
             return FRUIT_CARD_TYPES.indexOf(fruitName) >= 0 ? fruitName : null;
@@ -3492,15 +4046,48 @@ const renderRemoteDrawPage = (draw2 = false) => `<!doctype html>
             fruitCardState.clear();
             renderFruitCards();
         }
+        function buildFeverBaseShot(fruitType) {
+            const imagePath = FEVER_STATIC_IMAGE_PATHS[fruitType];
+            if (imagePath) {
+                const size = FEVER_STATIC_FRUIT_SIZE[fruitType] || 55;
+                return {
+                    processing_width: CONFIG.processingWidth,
+                    processing_height: CONFIG.processingHeight,
+                    frame_width: CONFIG.frameWidth,
+                    frame_height: CONFIG.frameHeight,
+                    bullet_assets: [{
+                        image: CONFIG.spaceDataUrl + '/' + imagePath,
+                        origin_x: Math.round((CONFIG.processingWidth - size) / 2),
+                        origin_y: Math.round((CONFIG.processingHeight - size) / 2),
+                        width: size,
+                        height: size,
+                        fruit_name: fruitType,
+                    }],
+                };
+            }
+            const match = shotHistory.slice().reverse().find(function(s) {
+                return s.bullet_assets && s.bullet_assets[0] && s.bullet_assets[0].fruit_name === fruitType;
+            });
+            if (match) return match;
+            if (shotHistory.length === 0) return null;
+            return shotHistory[Math.floor(Math.random() * shotHistory.length)];
+        }
         function cloneShotForFever(shot) {
             const cloned = JSON.parse(JSON.stringify(shot));
+            const pw = cloned.processing_width || CONFIG.processingWidth;
+            const ph = cloned.processing_height || CONFIG.processingHeight;
             const assets = cloned.bullet_assets || [];
             assets.forEach(function(asset) {
-                const maxX = Math.max(1, cloned.processing_width - Math.max(1, asset.width || 1));
-                const maxY = Math.max(1, cloned.processing_height - Math.max(1, asset.height || 1));
+                const maxX = Math.max(1, pw - Math.max(1, asset.width || 1));
+                const maxY = Math.max(1, ph - Math.max(1, asset.height || 1));
                 asset.origin_x = Math.round(Math.random() * maxX);
-                asset.origin_y = Math.round(Math.random() * Math.min(maxY, cloned.processing_height * 0.68));
+                asset.origin_y = Math.round(Math.random() * Math.min(maxY, ph * 0.68));
             });
+            const angle = (Math.random() - 0.5) * Math.PI * 0.65;
+            cloned.launch_vx = Math.sin(angle);
+            cloned.launch_vy = -Math.cos(angle);
+            cloned.launch_x = Math.random() * pw;
+            cloned.launch_y = ph;
             return cloned;
         }
         async function enqueueFeverShot(shot) {
@@ -3522,15 +4109,17 @@ const renderRemoteDrawPage = (draw2 = false) => `<!doctype html>
             }
         }
         function startFeverTime() {
-            if (!DRAW2_MODE || feverActive || shotHistory.length === 0) return;
+            if (!DRAW2_MODE || feverActive) return;
             feverActive = true;
             mainStage.classList.add('fever-active');
             void setFeverState(true);
             feverTimer = window.setInterval(function() {
-                if (shotHistory.length === 0) return;
-                const source = shotHistory[Math.floor(Math.random() * shotHistory.length)];
-                void enqueueFeverShot(cloneShotForFever(source));
-            }, 100);
+                const fruitType = FRUIT_CARD_TYPES[feverShotIndex % FRUIT_CARD_TYPES.length];
+                feverShotIndex += 1;
+                const base = buildFeverBaseShot(fruitType);
+                if (!base) return;
+                void enqueueFeverShot(cloneShotForFever(base));
+            }, 200);
             feverEndTimer = window.setTimeout(function() {
                 if (feverTimer !== null) window.clearInterval(feverTimer);
                 feverTimer = null;
@@ -3578,20 +4167,71 @@ const renderRemoteDrawPage = (draw2 = false) => `<!doctype html>
             }
             return null;
         }
-        async function forceTopJudgeVariantForFire() {
+        async function runShapeMatchForFire(bbox) {
+            const response = await fetch('/api/remote-draw/shape-match', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    image: buildInputDataUrl(),
+                    bbox,
+                    canvas_width: canvas.width,
+                    canvas_height: canvas.height,
+                }),
+            });
+            const result = await response.json();
+            if (!response.ok) throw new Error(result.error || '形状一致度の判定に失敗しました');
+            updateShapeMatchPanel(result);
+            return result;
+        }
+        async function prepareProductionFirePrediction() {
             if (!DRAW2_MODE || !productionModeEnabled || gameFlowPhase === 'tutorial') return false;
             const bbox = getInkBounds();
             if (!bbox) return false;
+            const forcedStaticFruit = getForcedStaticFruitType(bbox);
+            if (forcedStaticFruit) {
+                shapeMatchedStaticFruit = forcedStaticFruit;
+                latestPredictionId = null;
+                lastPredictionFruitName = forcedStaticFruit;
+                productionSelectedVariant = null;
+                productionSelectedAt = 0;
+                colorPreviewActive = false;
+                canvasRevision += 1;
+                submittedCanvasRevision = Math.min(submittedCanvasRevision, canvasRevision - 1);
+                updateFireButtonState();
+                return true;
+            }
             if (!latestJudgeScores) {
                 await runJudge();
             }
-            const topVariant = getTopJudgeVariant(latestJudgeScores, true);
-            if (!topVariant) return false;
-            generatedVariant = topVariant;
-            productionSelectedVariant = topVariant;
-            productionSelectedAt = Date.now();
+            const winner = resolveProductionVariant(latestJudgeScores, bbox);
+            if (winner) {
+                generatedVariant = winner;
+                productionSelectedVariant = winner;
+                productionSelectedAt = Date.now();
+                shapeMatchedStaticFruit = null;
+                latestPredictionId = null;
+                lastPredictionFruitName = null;
+                colorPreviewActive = false;
+                canvasRevision += 1;
+                submittedCanvasRevision = Math.min(submittedCanvasRevision, canvasRevision - 1);
+                updateJudgeProbDisplay();
+                updateFireButtonState();
+                return true;
+            }
+            let shapeResult = null;
+            try {
+                shapeResult = await runShapeMatchForFire(bbox);
+            } catch (error) {
+                console.warn('[shape-match]', error);
+                return false;
+            }
+            const best = shapeResult && shapeResult.best;
+            if (!best || SMALL_STATIC_FRUITS.indexOf(best) < 0) return false;
+            shapeMatchedStaticFruit = best;
             latestPredictionId = null;
-            lastPredictionFruitName = null;
+            lastPredictionFruitName = best;
+            productionSelectedVariant = null;
+            productionSelectedAt = 0;
             colorPreviewActive = false;
             canvasRevision += 1;
             submittedCanvasRevision = Math.min(submittedCanvasRevision, canvasRevision - 1);
@@ -3618,6 +4258,7 @@ const renderRemoteDrawPage = (draw2 = false) => `<!doctype html>
         }
         function renderStaticFruitPreview(asset) {
             if (!asset || !asset.image) return;
+            latestPreviewAsset = asset;
             staticFruitPreview.src = asset.image;
             staticFruitPreview.hidden = false;
             staticFruitPreview.style.left = ((asset.origin_x / canvas.width) * 100) + '%';
@@ -3635,6 +4276,7 @@ const renderRemoteDrawPage = (draw2 = false) => `<!doctype html>
             preview.removeAttribute('src');
             staticFruitPreview.hidden = true;
             staticFruitPreview.removeAttribute('src');
+            latestPreviewAsset = null;
             colorPreviewActive = false;
             renderDisplayLines(true);
             updateFireButtonState();
@@ -3644,6 +4286,7 @@ const renderRemoteDrawPage = (draw2 = false) => `<!doctype html>
             const stageImageSrc = payload.stage_image;
             staticFruitPreview.hidden = true;
             staticFruitPreview.removeAttribute('src');
+            latestPreviewAsset = Array.isArray(payload.bullet_assets) && payload.bullet_assets.length > 0 ? payload.bullet_assets[0] : null;
             const suppressLowPixelSkip = productionModeEnabled && generatedVariant === 'apple_512' && !payload.non_alpha_mode;
             if (!suppressLowPixelSkip && lowPixelSkipEnabled && (generatedVariant === 'banana_400' || generatedVariant === 'apple_512')) {
                 measurePixelCounts(stageImageSrc, resolvedCrop).then(function(counts) {
@@ -3891,6 +4534,9 @@ const renderRemoteDrawPage = (draw2 = false) => `<!doctype html>
         function setFlowOverlayPhase(phase) {
             gameFlowOverlay.classList.remove('phase-ended', 'phase-handoff', 'phase-difficulty', 'phase-tutorial', 'phase-tutorial_done');
             gameFlowOverlay.classList.remove('result-clear', 'result-over');
+            gameFlowOverlay.classList.remove('tutorial-fire-step', 'tutorial-direct-step');
+            gameFlowOverlay.classList.remove('start-ready');
+            mainStage.classList.remove('tutorial-card-highlight');
             if (phase) gameFlowOverlay.classList.add('phase-' + phase);
         }
         function flowButton(label, className, onClick) {
@@ -3952,6 +4598,57 @@ const renderRemoteDrawPage = (draw2 = false) => `<!doctype html>
         }
         function currentTutorialFruit() {
             return TUTORIAL_FRUITS[Math.max(0, Math.min(TUTORIAL_FRUITS.length - 1, tutorialFruitIndex))] || 'apple';
+        }
+        async function syncTutorialProgress() {
+            if (gameFlowPhase !== 'tutorial') return;
+            try {
+                const response = await fetch('/api/tutorial-state?t=' + Date.now(), { cache: 'no-store' });
+                if (!response.ok) return;
+                const state = await response.json();
+                const index = Math.max(0, Math.min(TUTORIAL_FRUITS.length - 1, Number(state.index || 0)));
+                if (index !== tutorialFruitIndex) {
+                    tutorialFruitIndex = index;
+                    resetTutorialGuideProgress();
+                    await clearRemoteSession();
+                    renderGameFlow({ phase: 'tutorial', difficulty: state.difficulty || 'normal', result: null, signal: lastGameFlowSignal });
+                }
+            } catch (error) {
+                console.warn('[tutorial-state]', error);
+            }
+        }
+        function tutorialFruitLabel(fruit) {
+            if (fruit === 'apple') return 'りんご';
+            if (fruit === 'banana') return 'バナナ';
+            if (fruit === 'grape') return 'ブドウ';
+            return fruit;
+        }
+        function isTutorialDirectSwipeFruit() {
+            const fruit = currentTutorialFruit();
+            return fruit === 'apple' || fruit === 'grape';
+        }
+        function currentTutorialTitle() {
+            const fruit = currentTutorialFruit();
+            if (tutorialStep === 'direct') {
+                return fruit === 'grape' ? 'ブドウを斜めに飛ばして' : 'りんごをスワイプして飛ばして';
+            }
+            if (tutorialStep === 'button') return '出てこない時は発射ボタン';
+            if (tutorialStep === 'swipe') return tutorialFruitLabel(fruit) + 'をスワイプして飛ばして';
+            return '線に沿って' + tutorialFruitLabel(fruit) + 'を描いて';
+        }
+        function createTutorialFeverGuide() {
+            const guide = document.createElement('div');
+            guide.className = 'tutorial-fever-guide';
+            FRUIT_CARD_TYPES.forEach(function(type, index) {
+                const card = document.createElement('div');
+                card.className = 'tutorial-fever-card';
+                card.style.setProperty('--card-index', String(index));
+                const img = document.createElement('img');
+                img.src = '/api/space-data/fruit_cards/' + type + '.png';
+                img.alt = type;
+                card.appendChild(img);
+                guide.appendChild(card);
+            });
+            return guide;
         }
         function fruitNameForVariant(variant) {
             if (variant === 'apple_512') return 'apple';
@@ -4188,14 +4885,17 @@ const renderRemoteDrawPage = (draw2 = false) => `<!doctype html>
             latestPredictionId = null;
             lastPredictionFruitName = null;
             colorPreviewActive = false;
-            if (canvasDirty && !predictInFlight) {
+            if (fruit !== 'banana' && canvasDirty && !predictInFlight) {
                 void runPrediction(false);
+            } else if (fruit === 'banana') {
+                hideColorPreview();
             }
         }
         function renderGameFlow(state) {
             const flowSignalChanged = state.signal !== lastGameFlowSignal;
             if (flowSignalChanged) {
                 lastGameFlowSignal = state.signal;
+                tutorialDoneStep = 'cards';
                 if (state.phase === 'tutorial' || state.phase === 'tutorial_done' || state.phase === 'playing') {
                     resetFruitCards();
                 }
@@ -4211,13 +4911,22 @@ const renderRemoteDrawPage = (draw2 = false) => `<!doctype html>
             }
             if (gameFlowPhase === 'ended') {
                 const isClear = state.result === 'clear';
+                const shouldHandoff = Boolean(state.shouldHandoff);
+                const totalSeconds = Math.max(0, Math.round(Number(state.totalPlaySeconds || 0)));
+                const attemptCount = Math.max(0, Math.round(Number(state.attemptCount || 0)));
                 setFlowOverlayPhase('ended');
                 gameFlowOverlay.classList.add(isClear ? 'result-clear' : 'result-over');
                 renderFlowPanel(
                     isClear ? 'MISSION COMPLETE' : 'MISSION FAILED',
-                    isClear ? 'ゲームクリア' : 'ゲームオーバー',
-                    '',
-                    [flowButton('次へ', '', async function() { await transitionGameFlow({ phase: 'handoff', difficulty: state.difficulty || 'normal' }); })],
+                    shouldHandoff
+                        ? (isClear ? 'ゲームクリア' : 'ゲームオーバー')
+                        : 'もう一度チャレンジ',
+                    shouldHandoff
+                        ? ''
+                        : 'プレイ時間 ' + totalSeconds + '秒 / 80秒　' + attemptCount + '回目。まだ続けられます。',
+                    [flowButton(shouldHandoff ? '次へ' : '難易度を選ぶ', '', async function() {
+                        await transitionGameFlow({ phase: shouldHandoff ? 'handoff' : 'difficulty', difficulty: state.difficulty || 'normal' });
+                    })],
                 );
                 setGameFlowOverlayVisible(true);
             } else if (gameFlowPhase === 'handoff') {
@@ -4236,10 +4945,10 @@ const renderRemoteDrawPage = (draw2 = false) => `<!doctype html>
                     '難易度を選んでください',
                     '初めての人はイージーかノーマルを推奨。はじめに短いチュートリアルを行います。',
                     [
-                        flowButton('イージー', 'secondary', async function() { await transitionGameFlow({ phase: 'tutorial', difficulty: 'easy' }); await clearRemoteSession(); }),
-                        flowButton('ノーマル', '', async function() { await transitionGameFlow({ phase: 'tutorial', difficulty: 'normal' }); await clearRemoteSession(); }),
-                        flowButton('ハード', 'secondary', async function() { await transitionGameFlow({ phase: 'tutorial', difficulty: 'hard' }); await clearRemoteSession(); }),
-                        flowButton('チャレンジ', 'secondary', async function() { await transitionGameFlow({ phase: 'tutorial', difficulty: 'challenge' }); await clearRemoteSession(); }),
+                        flowButton('イージー', 'easy', async function() { await transitionGameFlow({ phase: 'tutorial', difficulty: 'easy' }); await clearRemoteSession(); }),
+                        flowButton('ノーマル', 'normal', async function() { await transitionGameFlow({ phase: 'tutorial', difficulty: 'normal' }); await clearRemoteSession(); }),
+                        flowButton('ハード', 'hard', async function() { await transitionGameFlow({ phase: 'tutorial', difficulty: 'hard' }); await clearRemoteSession(); }),
+                        flowButton('チャレンジ', 'challenge', async function() { await transitionGameFlow({ phase: 'tutorial', difficulty: 'challenge' }); await clearRemoteSession(); }),
                     ],
                 );
                 setGameFlowOverlayVisible(true);
@@ -4248,7 +4957,7 @@ const renderRemoteDrawPage = (draw2 = false) => `<!doctype html>
                 setFlowOverlayPhase('tutorial');
                 renderFlowPanel(
                     'TUTORIAL',
-                    tutorialStep === 'fire' ? '発射ボタンを押してください' : '線に沿って' + (currentTutorialFruit() === 'apple' ? 'りんご' : currentTutorialFruit() === 'banana' ? 'バナナ' : 'ブドウ') + 'を描いて',
+                    currentTutorialTitle(),
                     '',
                     [flowButton('スキップ', 'secondary', async function() { await transitionGameFlow({ phase: 'playing', difficulty: state.difficulty || 'normal' }); await clearRemoteSession(); })],
                     createAppleGuide(),
@@ -4257,12 +4966,24 @@ const renderRemoteDrawPage = (draw2 = false) => `<!doctype html>
                 setGameFlowOverlayVisible(true);
             } else if (gameFlowPhase === 'tutorial_done') {
                 setFlowOverlayPhase('tutorial_done');
-                renderFlowPanel(
-                    'TUTORIAL COMPLETE',
-                    'チュートリアル終了',
-                    '操作は完了です。本番ゲームを始めましょう。',
-                    [flowButton('ゲームを始める', '', async function() { resetFruitCards(); await transitionGameFlow({ phase: 'playing', difficulty: state.difficulty || 'normal' }); await clearRemoteSession(); })],
-                );
+                mainStage.classList.add('tutorial-card-highlight');
+                gameFlowOverlay.classList.toggle('start-ready', tutorialDoneStep === 'start');
+                if (tutorialDoneStep === 'start') {
+                    mainStage.classList.remove('tutorial-card-highlight');
+                    renderFlowPanel(
+                        'TUTORIAL COMPLETE',
+                        'チュートリアル終了',
+                        '準備ができたらゲームを始めましょう。',
+                        [flowButton('ゲームを始める', '', async function() { resetFruitCards(); await transitionGameFlow({ phase: 'playing', difficulty: state.difficulty || 'normal' }); await clearRemoteSession(); })],
+                    );
+                } else {
+                    renderFlowPanel(
+                        'FEVER TIME',
+                        '7つ集めるとフィーバータイム',
+                        '上のフルーツカードを全部そろえよう。',
+                        [flowButton('次へ', '', function() { tutorialDoneStep = 'start'; renderGameFlow(state); })],
+                    );
+                }
                 setGameFlowOverlayVisible(true);
             } else {
                 gameFlowOverlay.innerHTML = '';
@@ -4279,7 +5000,7 @@ const renderRemoteDrawPage = (draw2 = false) => `<!doctype html>
                 console.warn(error);
             }
         }
-        async function commitLatestPrediction() {
+        async function commitLatestPrediction(enqueueShot) {
             if (!latestPredictionId) return;
             if (productionModeEnabled) {
                 const isStaticFruit = isStaticFruitName(lastPredictionFruitName);
@@ -4295,23 +5016,22 @@ const renderRemoteDrawPage = (draw2 = false) => `<!doctype html>
             const response = await fetch('/api/remote-draw/commit', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ session_id: sessionId, prediction_id: latestPredictionId }),
+                body: JSON.stringify({ session_id: sessionId, prediction_id: latestPredictionId, enqueue: enqueueShot !== false }),
             });
             const payload = await response.json();
             if (!response.ok) throw new Error(payload.error || 'Failed to commit remote shot');
-            if (DRAW2_MODE && payload.shot) {
+            if (DRAW2_MODE && payload.shot && enqueueShot !== false) {
                 shotHistory.push(payload.shot);
                 if (shotHistory.length > 64) shotHistory.shift();
                 const shotFruit = payload.shot.bullet_assets && payload.shot.bullet_assets[0]
                     ? payload.shot.bullet_assets[0].fruit_name
                     : lastPredictionFruitName;
                 revealFruitCard(shotFruit);
-                if (gameFlowPhase === 'tutorial' && shotFruit === currentTutorialFruit() && tutorialFruitIndex < TUTORIAL_FRUITS.length - 1) {
-                    tutorialFruitIndex += 1;
-                    resetTutorialGuideProgress();
-                }
             }
-            return true;
+            return payload.shot || true;
+        }
+        function shouldPrepareSwipeShot() {
+            return DRAW2_MODE && productionModeEnabled && (gameFlowPhase === 'playing' || gameFlowPhase === 'tutorial');
         }
         function getPendingFireFruitName() {
             if (gameFlowPhase === 'tutorial') return currentTutorialFruit();
@@ -4324,6 +5044,214 @@ const renderRemoteDrawPage = (draw2 = false) => `<!doctype html>
         function playPendingFireSound() {
             const fruitName = getPendingFireFruitName();
             if (fruitName) playUiSound('fruitShoot', fruitName);
+        }
+        function resetSwipeDrag() {
+            swipeDragStartClient = null;
+            mainStage.classList.remove('swipe-dragging');
+            mainStage.style.removeProperty('--swipe-drag-x');
+            mainStage.style.removeProperty('--swipe-drag-y');
+        }
+        function stopSwipeInertia() {
+            if (swipeInertiaFrame !== null) {
+                window.cancelAnimationFrame(swipeInertiaFrame);
+                swipeInertiaFrame = null;
+            }
+        }
+        function setSwipeFruitOffset(x, y) {
+            swipeFruitOffset = { x, y };
+            mainStage.style.setProperty('--swipe-base-x', x.toFixed(1) + 'px');
+            mainStage.style.setProperty('--swipe-base-y', y.toFixed(1) + 'px');
+        }
+        function buildTransparentSwipePreview(src, done) {
+            const img = new Image();
+            img.onload = function() {
+                try {
+                    const tmp = document.createElement('canvas');
+                    tmp.width = Math.max(1, img.naturalWidth || img.width);
+                    tmp.height = Math.max(1, img.naturalHeight || img.height);
+                    const tctx = tmp.getContext('2d');
+                    if (!tctx) {
+                        done(src);
+                        return;
+                    }
+                    tctx.drawImage(img, 0, 0, tmp.width, tmp.height);
+                    const imageData = tctx.getImageData(0, 0, tmp.width, tmp.height);
+                    const data = imageData.data;
+                    for (let i = 0; i < data.length; i += 4) {
+                        if (data[i] > 246 && data[i + 1] > 246 && data[i + 2] > 246) data[i + 3] = 0;
+                    }
+                    tctx.putImageData(imageData, 0, 0);
+                    done(tmp.toDataURL('image/png'));
+                } catch (error) {
+                    done(src);
+                }
+            };
+            img.onerror = function() { done(src); };
+            img.src = src;
+        }
+        function renderSwipeFruitPreviewAsset(asset, keepWithoutPending) {
+            if (!asset || !asset.image) {
+                swipeFruitPreview.hidden = true;
+                swipeFruitPreview.removeAttribute('src');
+                return;
+            }
+            const serial = ++swipePreviewSerial;
+            swipeFruitPreview.src = asset.image;
+            swipeFruitPreview.hidden = false;
+            buildTransparentSwipePreview(asset.image, function(src) {
+                if (serial !== swipePreviewSerial || (!keepWithoutPending && !pendingSwipeShot)) return;
+                swipeFruitPreview.src = src;
+                swipeFruitPreview.hidden = false;
+            });
+            swipeFruitPreview.style.left = ((asset.origin_x / canvas.width) * 100) + '%';
+            swipeFruitPreview.style.top = ((asset.origin_y / canvas.height) * 100) + '%';
+            swipeFruitPreview.style.width = ((asset.width / canvas.width) * 100) + '%';
+            swipeFruitPreview.style.height = ((asset.height / canvas.height) * 100) + '%';
+            setSwipeFruitOffset(0, 0);
+        }
+        function renderSwipeFruitPreview(shot) {
+            const asset = shot && shot.bullet_assets && shot.bullet_assets[0];
+            renderSwipeFruitPreviewAsset(asset, false);
+        }
+        function setSwipeShotReady(shot) {
+            pendingSwipeShot = shot || null;
+            swipeStartPoint = null;
+            stopSwipeInertia();
+            resetSwipeDrag();
+            if (pendingSwipeShot) {
+                renderSwipeFruitPreview(pendingSwipeShot);
+            } else {
+                swipePreviewSerial += 1;
+                swipeFruitPreview.hidden = true;
+                swipeFruitPreview.removeAttribute('src');
+                setSwipeFruitOffset(0, 0);
+            }
+            mainStage.classList.toggle('swipe-shot-ready', Boolean(pendingSwipeShot));
+            setFireButtonDisabled(Boolean(pendingSwipeShot));
+            clearButton.disabled = Boolean(pendingSwipeShot);
+        }
+        function cancelPreparedSwipeShot(suppressNextDirectSwipe) {
+            pendingSwipeShot = null;
+            swipeStartPoint = null;
+            directSwipeCandidate = null;
+            activePointerId = null;
+            drawing = false;
+            drawingSuspendedByGuide = false;
+            stopSwipeInertia();
+            resetSwipeDrag();
+            swipePreviewSerial += 1;
+            swipeFruitPreview.hidden = true;
+            swipeFruitPreview.removeAttribute('src');
+            setSwipeFruitOffset(0, 0);
+            mainStage.classList.remove('swipe-shot-ready', 'swipe-shot-bounce', 'swipe-shot-local-fly');
+            suppressDirectSwipeUntilNextStroke = Boolean(suppressNextDirectSwipe);
+            setFireButtonDisabled(false);
+        }
+        function pointFromClient(clientX, clientY) {
+            const rect = canvas.getBoundingClientRect();
+            const x = ((clientX - rect.left) / rect.width) * canvas.width;
+            const y = ((clientY - rect.top) / rect.height) * canvas.height;
+            return {
+                x: Math.max(0, Math.min(canvas.width, x)),
+                y: Math.max(0, Math.min(canvas.height, y)),
+            };
+        }
+        function moveSwipeFruitOffsetBy(deltaX, deltaY) {
+            let nextX = swipeFruitOffset.x + deltaX;
+            let nextY = swipeFruitOffset.y + deltaY;
+            const rect = swipeFruitPreview.getBoundingClientRect();
+            const baseTop = rect.top - swipeFruitOffset.y;
+            const margin = 1;
+            let bouncedY = false;
+            if (baseTop + nextY + rect.height > window.innerHeight - margin) {
+                nextY = window.innerHeight - margin - rect.height - baseTop;
+                bouncedY = true;
+            }
+            setSwipeFruitOffset(nextX, nextY);
+            return { bouncedY, rect: swipeFruitPreview.getBoundingClientRect() };
+        }
+        function normalizeLaunchVelocity(vx, vy) {
+            const sideSpeed = Math.abs(vx);
+            if (vy >= 0) {
+                vy = -Math.max(0.02, sideSpeed * 0.12);
+            } else {
+                const minimumUpward = sideSpeed * 0.55;
+                if (Math.abs(vy) < minimumUpward) {
+                    vy = -minimumUpward;
+                }
+            }
+            const len = Math.max(1, Math.hypot(vx, vy));
+            return { x: vx / len, y: vy / len };
+        }
+        async function enqueuePreparedSwipeShotFromMotion(vx, vy) {
+            if (!pendingSwipeShot) return false;
+            playPendingFireSound();
+            const shot = JSON.parse(JSON.stringify(pendingSwipeShot));
+            shot.launch_x = CONFIG.processingWidth / 2;
+            shot.launch_y = CONFIG.processingHeight;
+            const launchVelocity = normalizeLaunchVelocity(vx, vy);
+            shot.launch_vx = launchVelocity.x;
+            shot.launch_vy = launchVelocity.y;
+            const response = await fetch('/api/remote-shot/enqueue', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ shot }),
+            });
+            const payload = await response.json();
+            if (!response.ok) throw new Error(payload.error || '発射キューへの追加に失敗しました');
+            shotHistory.push(shot);
+            if (shotHistory.length > 64) shotHistory.shift();
+            const shotFruit = shot.bullet_assets && shot.bullet_assets[0] ? shot.bullet_assets[0].fruit_name : lastPredictionFruitName;
+            revealFruitCard(shotFruit);
+            setSwipeShotReady(null);
+            await clearRemoteSession(true);
+            return true;
+        }
+        function startSwipeInertia(endClientX, endClientY) {
+            if (!pendingSwipeShot || !swipeDragStartClient) return;
+            const dragDx = endClientX - swipeDragStartClient.x;
+            const dragDy = endClientY - swipeDragStartClient.y;
+            const dragLen = Math.hypot(dragDx, dragDy);
+            if (dragLen < 3) return;
+            moveSwipeFruitOffsetBy(dragDx, dragDy);
+            resetSwipeDrag();
+            let vx = dragDx * 6.8;
+            let vy = dragDy * 6.8;
+            let lastT = performance.now();
+            stopSwipeInertia();
+            const step = (now) => {
+                if (!pendingSwipeShot) {
+                    swipeInertiaFrame = null;
+                    return;
+                }
+                const dt = Math.min(0.032, Math.max(0.001, (now - lastT) / 1000));
+                lastT = now;
+                const moved = moveSwipeFruitOffsetBy(vx * dt, vy * dt);
+                if (moved.bouncedY) vy *= -0.78;
+                const rect = moved.rect;
+                const exitedTop = rect.top <= -2 && vy < 0;
+                const exitedLeft = rect.left <= 1 && vx < 0;
+                const exitedRight = rect.right >= window.innerWidth - 1 && vx > 0;
+                if (exitedTop || exitedLeft || exitedRight) {
+                    swipeInertiaFrame = null;
+                    enqueuePreparedSwipeShotFromMotion(vx, vy).catch(function(error) {
+                        console.warn('[swipe-shot]', error);
+                        playUiSound('fireBlocked');
+                    });
+                    return;
+                }
+                const friction = Math.pow(0.94, dt * 60);
+                vx *= friction;
+                vy *= friction;
+                if (Math.hypot(vx, vy) < 18) {
+                    swipeInertiaFrame = null;
+                    return;
+                }
+                swipeInertiaFrame = window.requestAnimationFrame(step);
+            };
+            mainStage.classList.add('swipe-shot-local-fly');
+            window.setTimeout(function() { mainStage.classList.remove('swipe-shot-local-fly'); }, 360);
+            swipeInertiaFrame = window.requestAnimationFrame(step);
         }
         function buildBossDrawMirrorDataUrl() {
             const mirror = document.createElement('canvas');
@@ -4365,9 +5293,13 @@ const renderRemoteDrawPage = (draw2 = false) => `<!doctype html>
             if (canvasRevision === submittedCanvasRevision) {
                 if (commitAfter && latestPredictionId != null && !drawing) {
                     pendingCommitAfterPrediction = false;
-                    const committed = await commitLatestPrediction();
-                    if (committed && clearAfterCommit) {
-                        await clearRemoteSession();
+                    const prepareSwipe = shouldPrepareSwipeShot();
+                    const committed = await commitLatestPrediction(!prepareSwipe);
+                    if (committed && prepareSwipe && typeof committed === 'object') {
+                        setSwipeShotReady(committed);
+                        clearAfterCommit = false;
+                    } else if (committed && clearAfterCommit) {
+                        await clearRemoteSession(true);
                     }
                 }
                 return;
@@ -4375,7 +5307,20 @@ const renderRemoteDrawPage = (draw2 = false) => `<!doctype html>
             const bbox = getInkBounds();
             if (!bbox) return;
             const forcedStaticFruit = getForcedStaticFruitType(bbox);
-            const effectiveForcedStaticFruit = gameFlowPhase === 'tutorial' ? null : forcedStaticFruit;
+            let effectiveForcedStaticFruit = gameFlowPhase === 'tutorial' ? null : forcedStaticFruit;
+            if (
+                productionModeEnabled
+                && gameFlowPhase === 'tutorial'
+                && currentTutorialFruit() === 'banana'
+                && !commitAfter
+                && !pendingCommitAfterPrediction
+            ) {
+                latestPredictionId = null;
+                lastPredictionFruitName = null;
+                updateCropOverlay(computeGeneratedCropRect(bbox));
+                hideColorPreview();
+                return;
+            }
             if (productionModeEnabled && !effectiveForcedStaticFruit) {
                 if (gameFlowPhase === 'tutorial' && tutorialForceApple) {
                     const fruit = currentTutorialFruit();
@@ -4392,6 +5337,11 @@ const renderRemoteDrawPage = (draw2 = false) => `<!doctype html>
                 let winner = gameFlowPhase === 'tutorial' && tutorialForceApple
                     ? productionSelectedVariant
                     : resolveProductionVariant(latestJudgeScores, bbox);
+                if (winner) {
+                    shapeMatchedStaticFruit = null;
+                    lastPredictionFruitName = null;
+                    effectiveForcedStaticFruit = null;
+                }
                 if (!winner && commitAfter && DRAW2_MODE && gameFlowPhase !== 'tutorial') {
                     winner = getTopJudgeVariant(latestJudgeScores, true);
                     if (winner) {
@@ -4400,6 +5350,29 @@ const renderRemoteDrawPage = (draw2 = false) => `<!doctype html>
                     }
                 }
                 if (!winner) {
+                    if (DRAW2_MODE && gameFlowPhase !== 'tutorial') {
+                        let shapeResult = null;
+                        try {
+                            shapeResult = await runShapeMatchForFire(bbox);
+                        } catch (error) {
+                            console.warn('[shape-match]', error);
+                        }
+                        const rule = shapeResult && shapeResult.rule;
+                        const best = shapeResult && (shapeResult.rule_best || shapeResult.best);
+                        const bestScore = best && shapeResult.rule_scores && shapeResult.rule_scores[best]
+                            ? Number(shapeResult.rule_scores[best].score || 0)
+                            : 0;
+                        if (rule && Number(rule.closed_region_count || 0) >= 1 && best && SMALL_STATIC_FRUITS.indexOf(best) >= 0 && bestScore >= 0.5) {
+                            shapeMatchedStaticFruit = best;
+                            effectiveForcedStaticFruit = best;
+                            lastPredictionFruitName = best;
+                            productionSelectedVariant = null;
+                        } else {
+                            shapeMatchedStaticFruit = null;
+                        }
+                    }
+                }
+                if (!winner && !effectiveForcedStaticFruit) {
                     latestPredictionId = null;
                     lastPredictionFruitName = null;
                     preview.hidden = true;
@@ -4507,9 +5480,13 @@ const renderRemoteDrawPage = (draw2 = false) => `<!doctype html>
                 }
                 if (requestRevision === canvasRevision && (commitAfter || pendingCommitAfterPrediction) && !drawing) {
                     pendingCommitAfterPrediction = false;
-                    const committed = await commitLatestPrediction();
-                    if (committed && clearAfterCommit) {
-                        await clearRemoteSession();
+                    const prepareSwipe = shouldPrepareSwipeShot();
+                    const committed = await commitLatestPrediction(!prepareSwipe);
+                    if (committed && prepareSwipe && typeof committed === 'object') {
+                        setSwipeShotReady(committed);
+                        clearAfterCommit = false;
+                    } else if (committed && clearAfterCommit) {
+                        await clearRemoteSession(true);
                     }
                 }
             } catch (error) {
@@ -4518,9 +5495,13 @@ const renderRemoteDrawPage = (draw2 = false) => `<!doctype html>
                 predictInFlight = false;
                 if (pendingCommitAfterPrediction && !drawing && latestPredictionId) {
                     pendingCommitAfterPrediction = false;
-                    const committed = await commitLatestPrediction();
-                    if (committed && clearAfterCommit) {
-                        await clearRemoteSession();
+                    const prepareSwipe = shouldPrepareSwipeShot();
+                    const committed = await commitLatestPrediction(!prepareSwipe);
+                    if (committed && prepareSwipe && typeof committed === 'object') {
+                        setSwipeShotReady(committed);
+                        clearAfterCommit = false;
+                    } else if (committed && clearAfterCommit) {
+                        await clearRemoteSession(true);
                     }
                 } else if (canvasDirty && canvasRevision > submittedCanvasRevision) {
                     const shouldCommitAfterLatest = pendingCommitAfterPrediction && !drawing;
@@ -4533,11 +5514,183 @@ const renderRemoteDrawPage = (draw2 = false) => `<!doctype html>
             if (event && event.identifier !== undefined && event.identifier !== null) return 'touch:' + event.identifier;
             return 'mouse';
         }
+        function getLatestFruitClientRect() {
+            if (!latestPreviewAsset || !latestPreviewAsset.image || !colorPreviewActive || !latestPredictionId) return null;
+            const rect = canvas.getBoundingClientRect();
+            const left = rect.left + (latestPreviewAsset.origin_x / canvas.width) * rect.width;
+            const top = rect.top + (latestPreviewAsset.origin_y / canvas.height) * rect.height;
+            const width = (latestPreviewAsset.width / canvas.width) * rect.width;
+            const height = (latestPreviewAsset.height / canvas.height) * rect.height;
+            if (!(width > 0 && height > 0)) return null;
+            const padding = Math.max(12, Math.min(width, height) * 0.16);
+            return {
+                left: left - padding,
+                top: top - padding,
+                right: left + width + padding,
+                bottom: top + height + padding,
+            };
+        }
+        function isPointInLatestFruit(clientX, clientY) {
+            const rect = getLatestFruitClientRect();
+            return Boolean(rect && clientX >= rect.left && clientX <= rect.right && clientY >= rect.top && clientY <= rect.bottom);
+        }
+        function isDirectSwipeLaunchGesture(dx, dy) {
+            const distance = Math.hypot(dx, dy);
+            if (distance < 24) return false;
+            const downwardAllowance = Math.max(4, Math.abs(dx) * 0.08);
+            return dy <= downwardAllowance;
+        }
+        function isPointInSwipeFruitPreview(clientX, clientY) {
+            if (swipeFruitPreview.hidden) return false;
+            const rect = swipeFruitPreview.getBoundingClientRect();
+            if (!(rect.width > 0 && rect.height > 0)) return false;
+            const padding = Math.max(10, Math.min(rect.width, rect.height) * 0.12);
+            return clientX >= rect.left - padding
+                && clientX <= rect.right + padding
+                && clientY >= rect.top - padding
+                && clientY <= rect.bottom + padding;
+        }
+        function canStartDirectFruitSwipe(event) {
+            return DRAW2_MODE
+                && productionModeEnabled
+                && (gameFlowPhase === 'playing' || (gameFlowPhase === 'tutorial' && isTutorialDirectSwipeFruit()))
+                && !pendingSwipeShot
+                && !suppressDirectSwipeUntilNextStroke
+                && !predictInFlight
+                && !drawing
+                && canvasDirty
+                && colorPreviewActive
+                && latestPredictionId
+                && latestPreviewAsset
+                && isPointInLatestFruit(event.clientX, event.clientY);
+        }
+        async function prepareDirectSwipeShot() {
+            try {
+                return await commitLatestPrediction(false);
+            } catch (error) {
+                console.warn('[direct-swipe]', error);
+                return null;
+            }
+        }
+        function beginDirectSwipeCandidate(event) {
+            if (!canStartDirectFruitSwipe(event)) return false;
+            const point = pointFromEvent(event);
+            directSwipeCandidate = {
+                inputId: getInputId(event),
+                startClient: { x: event.clientX, y: event.clientY },
+                latestClient: { x: event.clientX, y: event.clientY },
+                points: [point],
+                shotPromise: prepareDirectSwipeShot(),
+            };
+            activePointerId = directSwipeCandidate.inputId;
+            renderSwipeFruitPreviewAsset(latestPreviewAsset, true);
+            mainStage.classList.add('swipe-shot-ready', 'swipe-dragging');
+            mainStage.style.removeProperty('--swipe-drag-x');
+            mainStage.style.removeProperty('--swipe-drag-y');
+            try { canvas.setPointerCapture?.(event.pointerId); } catch (error) {}
+            event.preventDefault();
+            return true;
+        }
+        function updateDirectSwipeCandidate(event) {
+            if (!directSwipeCandidate || activePointerId !== getInputId(event)) return false;
+            const dx = event.clientX - directSwipeCandidate.startClient.x;
+            const dy = event.clientY - directSwipeCandidate.startClient.y;
+            directSwipeCandidate.latestClient = { x: event.clientX, y: event.clientY };
+            directSwipeCandidate.points.push(pointFromEvent(event));
+            mainStage.style.setProperty('--swipe-drag-x', dx.toFixed(1) + 'px');
+            mainStage.style.setProperty('--swipe-drag-y', dy.toFixed(1) + 'px');
+            event.preventDefault();
+            return true;
+        }
+        function replayDirectSwipeAsStroke(points) {
+            if (!points || points.length === 0) return;
+            activeStrokeSerial += 1;
+            latestPredictionId = null;
+            latestPreviewAsset = null;
+            shapeMatchedStaticFruit = null;
+            updateShapeMatchPanel(null);
+            if (strokePoints.length > 0) strokePoints.push(null);
+            ctx.beginPath();
+            points.forEach(function(point, index) {
+                strokePoints.push(point);
+                if (index === 0) {
+                    ctx.moveTo(point.x, point.y);
+                    ctx.lineTo(point.x, point.y);
+                } else {
+                    ctx.lineTo(point.x, point.y);
+                }
+            });
+            ctx.stroke();
+            renderDisplayLines(true);
+            canvasDirty = true;
+            canvasRevision += 1;
+            updateGeneratedModeCropGuide();
+            setFireButtonDisabled(false);
+            if (!predictInFlight) void runPrediction(false);
+        }
+        async function finishDirectSwipeCandidate(event) {
+            if (!directSwipeCandidate || activePointerId !== getInputId(event)) return false;
+            const candidate = directSwipeCandidate;
+            directSwipeCandidate = null;
+            activePointerId = null;
+            const endClientX = event.clientX;
+            const endClientY = event.clientY;
+            const dx = endClientX - candidate.startClient.x;
+            const dy = endClientY - candidate.startClient.y;
+            const shouldLaunch = isDirectSwipeLaunchGesture(dx, dy);
+            resetSwipeDrag();
+            if (!shouldLaunch) {
+                mainStage.classList.remove('swipe-shot-ready');
+                swipePreviewSerial += 1;
+                swipeFruitPreview.hidden = true;
+                swipeFruitPreview.removeAttribute('src');
+                setSwipeFruitOffset(0, 0);
+                suppressDirectSwipeUntilNextStroke = true;
+                event.preventDefault();
+                return true;
+            }
+            const shot = await candidate.shotPromise;
+            if (!shot || typeof shot !== 'object') {
+                mainStage.classList.remove('swipe-shot-ready');
+                swipePreviewSerial += 1;
+                swipeFruitPreview.hidden = true;
+                swipeFruitPreview.removeAttribute('src');
+                setSwipeFruitOffset(0, 0);
+                suppressDirectSwipeUntilNextStroke = true;
+                playUiSound('fireBlocked');
+                event.preventDefault();
+                return true;
+            }
+            setSwipeShotReady(shot);
+            swipeStartPoint = pointFromClient(candidate.startClient.x, candidate.startClient.y);
+            swipeDragStartClient = { x: candidate.startClient.x, y: candidate.startClient.y };
+            mainStage.style.setProperty('--swipe-drag-x', dx.toFixed(1) + 'px');
+            mainStage.style.setProperty('--swipe-drag-y', dy.toFixed(1) + 'px');
+            startSwipeInertia(endClientX, endClientY);
+            event.preventDefault();
+            return true;
+        }
+        function cancelDirectSwipeCandidate() {
+            if (!directSwipeCandidate) return false;
+            directSwipeCandidate = null;
+            activePointerId = null;
+            resetSwipeDrag();
+            mainStage.classList.remove('swipe-shot-ready');
+            swipePreviewSerial += 1;
+            swipeFruitPreview.hidden = true;
+            swipeFruitPreview.removeAttribute('src');
+            setSwipeFruitOffset(0, 0);
+            return true;
+        }
         function startDraw(event) {
+            if (beginDirectSwipeCandidate(event)) return;
             if (!isDrawInputEnabled()) return;
             if (drawing) return;
+            const wasDirectSwipeSuppressed = suppressDirectSwipeUntilNextStroke;
+            suppressDirectSwipeUntilNextStroke = false;
             const point = getTutorialGuidePoint(pointFromEvent(event));
             if (!point) {
+                suppressDirectSwipeUntilNextStroke = wasDirectSwipeSuppressed;
                 event.preventDefault();
                 return;
             }
@@ -4548,6 +5701,9 @@ const renderRemoteDrawPage = (draw2 = false) => `<!doctype html>
             activePointerId = getInputId(event);
             pendingCommitAfterPrediction = false;
             latestPredictionId = null;
+            latestPreviewAsset = null;
+            shapeMatchedStaticFruit = null;
+            updateShapeMatchPanel(null);
             if (!canvasDirty && strokePoints.length === 0) {
                 canvasRevision = 0;
                 submittedCanvasRevision = 0;
@@ -4586,6 +5742,7 @@ const renderRemoteDrawPage = (draw2 = false) => `<!doctype html>
             event.preventDefault();
         }
         function draw(event) {
+            if (updateDirectSwipeCandidate(event)) return;
             if (!drawing || activePointerId !== getInputId(event)) return;
             const point = getTutorialGuidePoint(pointFromEvent(event));
             if (!point) {
@@ -4627,7 +5784,8 @@ const renderRemoteDrawPage = (draw2 = false) => `<!doctype html>
             updateGeneratedModeCropGuide();
             event.preventDefault();
         }
-        function endDraw(event) {
+        async function endDraw(event) {
+            if (event && await finishDirectSwipeCandidate(event)) return;
             if (!drawing || (event && activePointerId !== getInputId(event))) return;
             drawing = false;
             lastTutorialGuidePoint = null;
@@ -4794,30 +5952,40 @@ const renderRemoteDrawPage = (draw2 = false) => `<!doctype html>
             drawSingleGraph(uiGraphCanvas, uiVals, '#ffb86c', 'rgba(255,184,108,0.14)', uiTotal);
         }
         function hasFireableFruit() {
+            if (pendingSwipeShot) return false;
             if (gameFlowPhase === 'tutorial') {
                 const expectedFruit = currentTutorialFruit();
                 const predictedFruit = lastPredictionFruitName || fruitNameForVariant(generatedVariant) || fruitNameForVariant(productionSelectedVariant);
+                if (expectedFruit === 'banana' && tutorialForceApple && !colorPreviewActive) return true;
                 return Boolean(latestPredictionId && colorPreviewActive && predictedFruit === expectedFruit);
             }
             if (DRAW2_MODE && productionModeEnabled && canvasDirty) {
-                return Boolean(
-                    (latestPredictionId && colorPreviewActive)
-                    || (latestJudgeScores && getTopJudgeVariant(latestJudgeScores, true))
-                );
+                return gameFlowPhase === 'playing';
             }
             return Boolean(latestPredictionId && colorPreviewActive);
         }
         function isDrawInputEnabled() {
-            return gameFlowPhase === 'playing' || gameFlowPhase === 'tutorial';
+            return !pendingSwipeShot && (gameFlowPhase === 'playing' || gameFlowPhase === 'tutorial');
         }
         function getTutorialStep() {
-            return gameFlowPhase === 'tutorial' && hasFireableFruit() ? 'fire' : 'draw';
+            if (gameFlowPhase !== 'tutorial') return 'draw';
+            if (pendingSwipeShot) return 'swipe';
+            const fruit = currentTutorialFruit();
+            if (fruit === 'banana' && tutorialForceApple && !colorPreviewActive) return 'button';
+            if (hasFireableFruit()) return isTutorialDirectSwipeFruit() ? 'direct' : 'button';
+            return 'draw';
         }
         function updateTutorialStepUi() {
             tutorialStep = getTutorialStep();
-            const fireStep = gameFlowPhase === 'tutorial' && tutorialStep === 'fire';
+            const fireStep = gameFlowPhase === 'tutorial' && tutorialStep === 'button';
+            const directStep = gameFlowPhase === 'tutorial' && (tutorialStep === 'direct' || tutorialStep === 'swipe');
             mainStage.classList.toggle('tutorial-fire-step', fireStep);
             gameFlowOverlay.classList.toggle('tutorial-fire-step', fireStep);
+            gameFlowOverlay.classList.toggle('tutorial-direct-step', directStep);
+            if (gameFlowPhase === 'tutorial') {
+                const title = gameFlowOverlay.querySelector('.flow-title');
+                if (title) title.textContent = currentTutorialTitle();
+            }
         }
         function updateFireButtonState() {
             if (DRAW2_MODE) {
@@ -4845,7 +6013,18 @@ const renderRemoteDrawPage = (draw2 = false) => `<!doctype html>
             mainStage.classList.remove('fire-ready');
         }
         updateGraphs();
-        async function clearRemoteSession() {
+        async function clearRemoteSession(preserveShapeMatchResult) {
+            const preservedShapeMatchResult = preserveShapeMatchResult ? lastShapeMatchResult : null;
+            pendingSwipeShot = null;
+            swipeStartPoint = null;
+            directSwipeCandidate = null;
+            suppressDirectSwipeUntilNextStroke = false;
+            stopSwipeInertia();
+            mainStage.classList.remove('swipe-shot-ready', 'swipe-shot-bounce', 'swipe-dragging');
+            swipePreviewSerial += 1;
+            swipeFruitPreview.hidden = true;
+            swipeFruitPreview.removeAttribute('src');
+            setSwipeFruitOffset(0, 0);
             drawing = false;
             drawingSuspendedByGuide = false;
             lastTutorialGuidePoint = null;
@@ -4855,6 +6034,7 @@ const renderRemoteDrawPage = (draw2 = false) => `<!doctype html>
             pendingCommitAfterPrediction = false;
             clearAfterCommit = false;
             latestPredictionId = null;
+            shapeMatchedStaticFruit = null;
             canvasRevision = 0;
             submittedCanvasRevision = 0;
             strokePoints = [];
@@ -4862,10 +6042,12 @@ const renderRemoteDrawPage = (draw2 = false) => `<!doctype html>
             productionSelectedVariant = null;
             productionSelectedAt = 0;
             lastNonSkippedApplePayload = null;
-            selectedSmallStaticFruit = null;
             resetTutorialGuideProgress();
             resetCanvasVisuals();
             clearPreview();
+            if (preservedShapeMatchResult) {
+                updateShapeMatchPanel(preservedShapeMatchResult);
+            }
             updateCropOverlay(null);
             setFireButtonDisabled(true);
             await fetch('/api/remote-draw/clear', {
@@ -4878,10 +6060,12 @@ const renderRemoteDrawPage = (draw2 = false) => `<!doctype html>
         canvas.addEventListener('pointermove', draw);
         canvas.addEventListener('pointerup', endDraw);
         canvas.addEventListener('pointercancel', endDraw);
-        canvas.addEventListener('touchstart', handleTouchStart, { passive: false });
-        canvas.addEventListener('touchmove', handleTouchMove, { passive: false });
-        canvas.addEventListener('touchend', handleTouchEnd, { passive: false });
-        canvas.addEventListener('touchcancel', handleTouchEnd, { passive: false });
+        if (!window.PointerEvent) {
+            canvas.addEventListener('touchstart', handleTouchStart, { passive: false });
+            canvas.addEventListener('touchmove', handleTouchMove, { passive: false });
+            canvas.addEventListener('touchend', handleTouchEnd, { passive: false });
+            canvas.addEventListener('touchcancel', handleTouchEnd, { passive: false });
+        }
         document.addEventListener('selectstart', function(event) {
             event.preventDefault();
         });
@@ -4980,6 +6164,7 @@ const renderRemoteDrawPage = (draw2 = false) => `<!doctype html>
             }
         });
         fireButton.addEventListener('click', async () => {
+            if (pendingSwipeShot) return;
             if (!canvasDirty || drawing) {
                 playUiSound('fireBlocked');
                 return;
@@ -4998,7 +6183,7 @@ const renderRemoteDrawPage = (draw2 = false) => `<!doctype html>
             clearAfterCommit = true;
             pendingCommitAfterPrediction = true;
             if (DRAW2_MODE && productionModeEnabled && gameFlowPhase !== 'tutorial' && !(latestPredictionId && colorPreviewActive)) {
-                const prepared = await forceTopJudgeVariantForFire();
+                const prepared = await prepareProductionFirePrediction();
                 if (!prepared) {
                     playUiSound('fireBlocked');
                     pendingCommitAfterPrediction = false;
@@ -5007,10 +6192,43 @@ const renderRemoteDrawPage = (draw2 = false) => `<!doctype html>
                     return;
                 }
             }
-            playPendingFireSound();
+            if (!shouldPrepareSwipeShot()) playPendingFireSound();
             if (predictInFlight) return;
             await runPrediction(true);
-            if (canvasDirty) setFireButtonDisabled(false);
+            if (canvasDirty && !pendingSwipeShot) setFireButtonDisabled(false);
+        });
+        mainStage.addEventListener('pointerdown', (event) => {
+            if (!pendingSwipeShot) return;
+            event.preventDefault();
+            if (!isPointInSwipeFruitPreview(event.clientX, event.clientY)) {
+                cancelPreparedSwipeShot(true);
+                return;
+            }
+            swipeStartPoint = pointFromClient(event.clientX, event.clientY);
+            swipeDragStartClient = { x: event.clientX, y: event.clientY };
+            mainStage.classList.add('swipe-dragging');
+            try { mainStage.setPointerCapture(event.pointerId); } catch (error) {}
+        });
+        mainStage.addEventListener('pointermove', (event) => {
+            if (!pendingSwipeShot || !swipeDragStartClient) return;
+            event.preventDefault();
+            const dx = event.clientX - swipeDragStartClient.x;
+            const dy = event.clientY - swipeDragStartClient.y;
+            mainStage.style.setProperty('--swipe-drag-x', dx.toFixed(1) + 'px');
+            mainStage.style.setProperty('--swipe-drag-y', dy.toFixed(1) + 'px');
+        });
+        mainStage.addEventListener('pointerup', (event) => {
+            if (!pendingSwipeShot || !swipeDragStartClient) return;
+            event.preventDefault();
+            const endClientX = event.clientX;
+            const endClientY = event.clientY;
+            startSwipeInertia(endClientX, endClientY);
+        });
+        mainStage.addEventListener('pointercancel', () => {
+            if (pendingSwipeShot) {
+                swipeStartPoint = null;
+                resetSwipeDrag();
+            }
         });
         clearButton.addEventListener('click', async () => {
             playUiSound('clearSketch');
@@ -5044,6 +6262,7 @@ const renderRemoteDrawPage = (draw2 = false) => `<!doctype html>
         void syncRemoteConfig();
         void syncGameResults();
         void syncGameFlow();
+        void syncTutorialProgress();
         window.setInterval(() => {
             const now = Date.now();
             if (drawing && canvasDirty && !predictInFlight && now - lastRealtimePredictAt >= realtimeIntervalMs) {
@@ -5059,6 +6278,7 @@ const renderRemoteDrawPage = (draw2 = false) => `<!doctype html>
         }, 1000);
         window.setInterval(() => {
             void syncGameFlow();
+            void syncTutorialProgress();
         }, 500);
     </script>
 </body>
@@ -5268,6 +6488,29 @@ const startControlServer = () => {
             return
         }
 
+        if (method === 'GET' && url === '/api/tutorial-state') {
+            writeJson(res, 200, {
+                ...tutorialState,
+                difficulty: gameFlowState.difficulty,
+            })
+            return
+        }
+
+        if (method === 'POST' && url === '/api/tutorial-state') {
+            try {
+                const rawBody = await readRequestBody(req)
+                const incoming = JSON.parse(rawBody) as { index?: number }
+                tutorialState = {
+                    index: Math.max(0, Math.min(2, Math.round(Number(incoming.index ?? 0)))),
+                    token: Date.now(),
+                }
+                writeJson(res, 200, { ok: true, ...tutorialState })
+            } catch (error) {
+                writeJson(res, 400, { error: error instanceof Error ? error.message : 'Bad tutorial state' })
+            }
+            return
+        }
+
         if (method === 'GET' && url === '/api/boss-defeats') {
             writeJson(res, 200, { counts: bossDefeatCounts })
             return
@@ -5359,6 +6602,7 @@ const startControlServer = () => {
                     phase?: GameFlowPhase
                     result?: 'clear' | 'over' | null
                     difficulty?: GameDifficulty
+                    play_seconds?: number
                 }
                 const nextPhase = incoming.phase
                 if (!nextPhase || !['playing', 'ended', 'handoff', 'difficulty', 'tutorial', 'tutorial_done'].includes(nextPhase)) {
@@ -5370,16 +6614,37 @@ const startControlServer = () => {
                     writeJson(res, 400, { error: 'Invalid difficulty' })
                     return
                 }
+                const endedAttempt = nextPhase === 'ended'
+                const addedPlaySeconds = endedAttempt ? Math.max(0, Math.min(3600, Number(incoming.play_seconds ?? 0) || 0)) : 0
+                const previousTotalPlaySeconds = gameFlowState.totalPlaySeconds ?? 0
+                const previousAttemptCount = gameFlowState.attemptCount ?? 0
+                let nextTotalPlaySeconds = previousTotalPlaySeconds + addedPlaySeconds
+                let nextAttemptCount = previousAttemptCount + (endedAttempt ? 1 : 0)
+                let nextShouldHandoff = gameFlowState.shouldHandoff ?? false
+                if (endedAttempt) {
+                    nextShouldHandoff = nextTotalPlaySeconds >= 80 || (incoming.result === 'over' && nextAttemptCount >= 3)
+                }
+                if (gameFlowState.phase === 'handoff' && nextPhase === 'difficulty') {
+                    nextTotalPlaySeconds = 0
+                    nextAttemptCount = 0
+                    nextShouldHandoff = false
+                }
                 gameFlowState = {
                     phase: nextPhase,
                     result: nextPhase === 'ended' ? incoming.result ?? gameFlowState.result ?? 'over' : null,
                     difficulty: nextDifficulty,
                     signal: Date.now(),
+                    totalPlaySeconds: nextTotalPlaySeconds,
+                    attemptCount: nextAttemptCount,
+                    shouldHandoff: nextShouldHandoff,
                 }
                 if (nextPhase === 'playing' || nextPhase === 'tutorial') {
                     spaceRestartSignal = Date.now()
                     remoteShotQueue.length = 0
                     feverUntil = 0
+                }
+                if (nextPhase === 'tutorial') {
+                    tutorialState = { index: 0, token: Date.now() }
                 }
                 appendControlLog(`game-flow phase=${gameFlowState.phase} result=${gameFlowState.result ?? '-'} difficulty=${gameFlowState.difficulty}`)
                 writeJson(res, 200, { ok: true, ...gameFlowState })
@@ -5400,6 +6665,9 @@ const startControlServer = () => {
                         result: null,
                         difficulty: gameFlowState.difficulty,
                         signal: spaceRestartSignal,
+                        totalPlaySeconds: 0,
+                        attemptCount: 0,
+                        shouldHandoff: false,
                     }
                     remoteShotQueue.length = 0
                     feverUntil = 0
@@ -5693,12 +6961,12 @@ const startControlServer = () => {
         if (method === 'POST' && url === '/api/remote-draw/commit') {
             try {
                 const rawBody = await readRequestBody(req)
-                const payload = JSON.parse(rawBody) as { session_id?: string; prediction_id?: number }
+                const payload = JSON.parse(rawBody) as { session_id?: string; prediction_id?: number; enqueue?: boolean }
                 if (!payload.session_id) {
                     writeJson(res, 400, { error: 'Missing session_id' })
                     return
                 }
-                const shot = commitRemoteShot(payload.session_id, payload.prediction_id)
+                const shot = commitRemoteShot(payload.session_id, payload.prediction_id, payload.enqueue !== false)
                 writeJson(res, 200, { ok: true, shot_id: shot.id, shot })
             } catch (error) {
                 writeJson(res, 400, {
@@ -5736,6 +7004,40 @@ const startControlServer = () => {
             } catch (error) {
                 writeJson(res, 400, {
                     error: error instanceof Error ? error.message : 'Judge failed',
+                })
+            }
+            return
+        }
+
+        if (method === 'POST' && url === '/api/remote-draw/shape-match') {
+            try {
+                const rawBody = await readRequestBody(req)
+                const body = JSON.parse(rawBody) as {
+                    image?: string
+                    bbox?: PredictRequest['bbox']
+                    canvas_width?: number
+                    canvas_height?: number
+                }
+                if (!body.image || !body.bbox) {
+                    writeJson(res, 400, { error: 'Missing image or bbox' })
+                    return
+                }
+                const result = await predictor.predict({
+                    image: body.image,
+                    sketch_overlay: '',
+                    bbox: body.bbox,
+                    image_id: 'shape-match',
+                    fruit_name: 'banana',
+                    judge_mode: 'shape_match',
+                    predict_mode: 'shape_match',
+                    canvas_width: body.canvas_width ?? REMOTE_DRAW_PROCESSING_WIDTH,
+                    canvas_height: body.canvas_height ?? REMOTE_DRAW_PROCESSING_HEIGHT,
+                })
+                appendControlLog(`shape match best=${(result as { best?: string }).best ?? '-'}`)
+                writeJson(res, 200, result)
+            } catch (error) {
+                writeJson(res, 400, {
+                    error: error instanceof Error ? error.message : 'Shape match failed',
                 })
             }
             return
@@ -5781,16 +7083,14 @@ const stopControlServer = () => {
     controlServer = null
 }
 
-const BERRY_SIZE_THRESHOLD = 35
-const SUIKA_SIZE_THRESHOLD = 150
-const SUIKA_VISIBLE_MAX_RATIO = 787 / 1024
-const SMALL_STATIC_FRUIT_TYPES: SmallStaticFruitType[] = ['berry', 'lemon', 'orange', 'peach']
+const DORIAN_SIZE_THRESHOLD = 150
+const DORIAN_VISIBLE_MAX_RATIO = 1
+const SMALL_STATIC_FRUIT_TYPES: SmallStaticFruitType[] = ['berry', 'lemon', 'peach']
 const STATIC_FRUIT_IMAGE_PATH: Record<StaticFruitType, string> = {
     berry: 'other_fruit/berry.png',
     lemon: 'other_fruit/Lemon.png',
-    orange: 'other_fruit/orange.png',
     peach: 'other_fruit/peach.png',
-    suika: 'other_fruit/suika.png',
+    dorian: 'other_fruit/dorian.png',
 }
 
 const readPngDimensions = (filePath: string): { width: number; height: number } | null => {
@@ -5819,7 +7119,7 @@ const buildStaticFruitResult = (
     const imagePath = STATIC_FRUIT_IMAGE_PATH[fruitType]
     const filePath = resolve(__dirname, '../../space_data', imagePath)
     const dimensions = readPngDimensions(filePath)
-    const visibleScale = fruitType === 'suika' ? SUIKA_VISIBLE_MAX_RATIO : 1
+    const visibleScale = fruitType === 'dorian' ? DORIAN_VISIBLE_MAX_RATIO : 1
     const imageScale = dimensions ? size / (Math.max(dimensions.width, dimensions.height) * visibleScale) : 1
     const assetWidth = dimensions ? Math.max(1, Math.round(dimensions.width * imageScale)) : Math.round(size)
     const assetHeight = dimensions ? Math.max(1, Math.round(dimensions.height * imageScale)) : Math.round(size)
@@ -5850,20 +7150,13 @@ const buildStaticFruitResult = (
     return { ...result, prediction_id: predictionId }
 }
 
-const resolveSmallStaticFruitType = (requested?: StaticFruitType): SmallStaticFruitType => {
-    if (requested && SMALL_STATIC_FRUIT_TYPES.includes(requested as SmallStaticFruitType)) {
-        return requested as SmallStaticFruitType
-    }
-    return SMALL_STATIC_FRUIT_TYPES[Math.floor(Math.random() * SMALL_STATIC_FRUIT_TYPES.length)]
-}
-
 const buildRemotePredictResult = async (payload: RemotePredictPayload) => {
     const maxDim = Math.max(payload.bbox.width, payload.bbox.height)
-    if (maxDim <= BERRY_SIZE_THRESHOLD) {
-        return buildStaticFruitResult(payload, resolveSmallStaticFruitType(payload.static_fruit_name))
+    if (payload.static_fruit_name && SMALL_STATIC_FRUIT_TYPES.includes(payload.static_fruit_name as SmallStaticFruitType)) {
+        return buildStaticFruitResult(payload, payload.static_fruit_name as SmallStaticFruitType)
     }
-    if (maxDim >= SUIKA_SIZE_THRESHOLD) {
-        return buildStaticFruitResult(payload, 'suika')
+    if (payload.static_fruit_name === 'dorian' || maxDim >= DORIAN_SIZE_THRESHOLD) {
+        return buildStaticFruitResult(payload, 'dorian')
     }
 
     const startedAt = performance.now()
@@ -5893,7 +7186,7 @@ const buildRemotePredictResult = async (payload: RemotePredictPayload) => {
     }
 }
 
-const commitRemoteShot = (sessionId: string, predictionId?: number) => {
+const commitRemoteShot = (sessionId: string, predictionId?: number, enqueue = true) => {
     const session = remotePredictSessions.get(sessionId)
     if (!session) {
         throw new Error('Remote session not found')
@@ -5914,8 +7207,12 @@ const commitRemoteShot = (sessionId: string, predictionId?: number) => {
         frame_width: session.frameWidth,
         frame_height: session.frameHeight,
     }
-    remoteShotQueue.push(shot)
-    appendControlLog(`remote shot queued id=${shot.id} prediction=${session.predictionId}`)
+    if (enqueue) {
+        remoteShotQueue.push(shot)
+        appendControlLog(`remote shot queued id=${shot.id} prediction=${session.predictionId}`)
+    } else {
+        appendControlLog(`remote shot prepared id=${shot.id} prediction=${session.predictionId}`)
+    }
     return shot
 }
 

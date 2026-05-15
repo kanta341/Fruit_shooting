@@ -8,6 +8,10 @@ type RemoteShotResponse = {
         processing_height: number
         frame_width: number
         frame_height: number
+        launch_x?: number
+        launch_y?: number
+        launch_vx?: number
+        launch_vy?: number
         bullet_assets?: Array<{
             image: string
             origin_x: number
@@ -76,8 +80,9 @@ export class RemoteDrawingSource implements BulletSource {
         const scaleX = shot.processing_width / shot.frame_width
         const scaleY = shot.processing_height / shot.frame_height
         const targetScaleX = Math.max(0.001, this.getTargetWidth() / shot.frame_width)
+        const targetScaleY = Math.max(0.001, window.innerHeight / shot.frame_height)
         const payloads = await Promise.all(
-            (shot.bullet_assets ?? []).map((asset) => this.buildBulletAssetPayload(asset, scaleX, scaleY, targetScaleX, shot.image_id ?? 'AUTO')),
+            (shot.bullet_assets ?? []).map((asset) => this.buildBulletAssetPayload(asset, scaleX, scaleY, targetScaleX, targetScaleY, shot.image_id ?? 'AUTO', shot)),
         )
         return payloads.filter((payload): payload is ShotPayload => Boolean(payload))
     }
@@ -87,7 +92,9 @@ export class RemoteDrawingSource implements BulletSource {
         scaleX: number,
         scaleY: number,
         targetScaleX: number,
+        targetScaleY: number,
         defaultImageId: string,
+        shot: NonNullable<RemoteShotResponse['shot']>,
 	    ): Promise<ShotPayload | null> {
 	        const image = await this.loadImage(asset.image)
 	        const logicalWidth = Math.max(1, Number(asset.width))
@@ -147,6 +154,10 @@ export class RemoteDrawingSource implements BulletSource {
 	            height: logicalBoundsHeight / scaleY,
 	            fruitType: asset.fruit_name ?? 'banana',
             imageId: asset.image_id ?? defaultImageId,
+            launchX: shot.launch_x == null ? undefined : (shot.launch_x / shot.processing_width) * this.getTargetWidth(),
+            launchY: shot.launch_y == null ? undefined : (shot.launch_y / shot.processing_height) * window.innerHeight,
+            velocityX: shot.launch_vx,
+            velocityY: shot.launch_vy,
         }
     }
 
@@ -201,6 +212,9 @@ export class RemoteDrawingSource implements BulletSource {
     private loadImage(src: string) {
         return new Promise<HTMLImageElement>((resolve, reject) => {
             const image = new Image()
+            if (!src.startsWith('data:')) {
+                image.crossOrigin = 'anonymous'
+            }
             image.onload = () => resolve(image)
             image.onerror = () => reject(new Error('Could not load remote generated image'))
             image.src = src

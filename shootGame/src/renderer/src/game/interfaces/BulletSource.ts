@@ -1,6 +1,6 @@
 export type CoreFruitType = 'banana' | 'apple' | 'grape'
-export type SmallStaticFruitType = 'berry' | 'lemon' | 'orange' | 'peach'
-export type FruitType = CoreFruitType | SmallStaticFruitType | 'suika'
+export type SmallStaticFruitType = 'berry' | 'lemon' | 'peach'
+export type FruitType = CoreFruitType | SmallStaticFruitType | 'dorian'
 
 export type ShotPayload = {
     sprite: HTMLCanvasElement
@@ -10,6 +10,10 @@ export type ShotPayload = {
     height: number
     fruitType: FruitType
     imageId: string
+    launchX?: number
+    launchY?: number
+    velocityX?: number
+    velocityY?: number
 }
 
 export type ShotBatch = ShotPayload[]

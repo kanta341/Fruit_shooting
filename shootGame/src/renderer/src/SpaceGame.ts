@@ -32,6 +32,8 @@ const APPLE_EXPLOSION_MAX_SCALE = 1.6
 const SPACE_GRAPE_SHARD_SCALE = 1.6
 const SPACE_GRAPE_SHARD_SPEED = 1650
 const SPACE_ENEMY_DEATH_DURATION = 0.5
+const CANNON_IMAGE_PATH = `${SPACE_API_BASE}/sample/houdai.png`
+const TAROU_IMAGE_PATH = `${SPACE_API_BASE}/sample/tarou.png`
 const SOUND_ASSETS: Record<string, string | Partial<Record<FruitType, string>>> = {
     bgmStart: `${VOICE_API_BASE}/background/チュートリアルBGM.mp3`,
     bgmMain: `${VOICE_API_BASE}/background/戦闘BGM.mp3`,
@@ -64,9 +66,8 @@ const SOUND_ASSETS: Record<string, string | Partial<Record<FruitType, string>>> 
         grape: `${VOICE_API_BASE}/fruit/発射/ブドウ発射.mp3`,
         berry: `${VOICE_API_BASE}/fruit/発射/いちご発射.mp3`,
         lemon: `${VOICE_API_BASE}/fruit/発射/レモン発射.mp3`,
-        orange: `${VOICE_API_BASE}/fruit/発射/みかん発射.mp3`,
         peach: `${VOICE_API_BASE}/fruit/発射/モモ発射.mp3`,
-        suika: `${VOICE_API_BASE}/fruit/発射/スイカ発射.mp3`,
+        dorian: `${VOICE_API_BASE}/fruit/発射/スイカ発射.mp3`,
     },
     fruitHit: {
         apple: `${VOICE_API_BASE}/fruit/破裂/りんご破裂.mp3`,
@@ -74,9 +75,8 @@ const SOUND_ASSETS: Record<string, string | Partial<Record<FruitType, string>>> 
         grape: `${VOICE_API_BASE}/fruit/破裂/ブドウ破裂2.mp3`,
         berry: `${VOICE_API_BASE}/fruit/破裂/いちご破裂.mp3`,
         lemon: `${VOICE_API_BASE}/fruit/破裂/レモン破裂.mp3`,
-        orange: `${VOICE_API_BASE}/fruit/破裂/みかん破裂.mp3`,
         peach: `${VOICE_API_BASE}/fruit/破裂/モモ破裂.mp3`,
-        suika: `${VOICE_API_BASE}/fruit/破裂/スイカ破裂.mp3`,
+        dorian: `${VOICE_API_BASE}/fruit/破裂/スイカ破裂.mp3`,
     },
 }
 
@@ -89,6 +89,9 @@ type GameFlowState = {
     result: 'clear' | 'over' | null
     difficulty: GameDifficulty
     signal: number
+    totalPlaySeconds?: number
+    attemptCount?: number
+    shouldHandoff?: boolean
 }
 
 const DIFFICULTY_SETTINGS: Record<GameDifficulty, { speed: number; spawn: number; label: string }> = {
@@ -207,6 +210,141 @@ class FruitPopEffect implements SpaceVisualEffect {
     }
 }
 
+class LemonBeamEffect implements SpaceVisualEffect {
+    markedForDeletion = false
+    private age = 0
+    private readonly duration = 0.22
+
+    constructor(
+        private readonly x: number,
+        private readonly y: number,
+        private readonly dx: number,
+        private readonly dy: number,
+        private readonly length: number,
+    ) {}
+
+    update(dt: number): void {
+        this.age += dt
+        if (this.age >= this.duration) this.markedForDeletion = true
+    }
+
+    render(ctx: CanvasRenderingContext2D): void {
+        const p = Math.min(1, this.age / this.duration)
+        const alpha = 1 - p
+        const ex = this.x + this.dx * this.length
+        const ey = this.y + this.dy * this.length
+        ctx.save()
+        ctx.globalCompositeOperation = 'lighter'
+        ctx.lineCap = 'round'
+        ctx.strokeStyle = `rgba(255, 242, 74, ${0.95 * alpha})`
+        ctx.lineWidth = 24 * (1 - p * 0.35)
+        ctx.beginPath()
+        ctx.moveTo(this.x, this.y)
+        ctx.lineTo(ex, ey)
+        ctx.stroke()
+        ctx.strokeStyle = `rgba(255, 255, 230, ${0.98 * alpha})`
+        ctx.lineWidth = 9 * (1 - p * 0.25)
+        ctx.beginPath()
+        ctx.moveTo(this.x, this.y)
+        ctx.lineTo(ex, ey)
+        ctx.stroke()
+        ctx.restore()
+    }
+}
+
+class PeachTarouEffect implements SpaceVisualEffect {
+    markedForDeletion = false
+    private age = 0
+    private x: number
+    private y: number
+    private targetX: number
+    private targetY: number
+    private wait = 0.12
+    private speed = 620
+
+    constructor(
+        x: number,
+        y: number,
+        private readonly image: HTMLImageElement,
+        private readonly isLoaded: () => boolean,
+        private readonly canvas: HTMLCanvasElement,
+        private readonly canHit: (target: { x: number; y: number; width: number; height: number }) => void,
+    ) {
+        this.x = x
+        this.y = y
+        const target = this.pickTarget()
+        this.targetX = target.x
+        this.targetY = target.y
+    }
+
+    update(dt: number): void {
+        this.age += dt
+        if (this.age >= 10.0) {
+            this.markedForDeletion = true
+            return
+        }
+        if (this.age < 0.55) return
+        if (this.wait > 0) {
+            this.wait -= dt
+        } else {
+            const dx = this.targetX - this.x
+            const dy = this.targetY - this.y
+            const dist = Math.hypot(dx, dy)
+            if (dist < 16) {
+                const target = this.pickTarget()
+                this.targetX = target.x
+                this.targetY = target.y
+                this.wait = 0.16
+            } else {
+                const step = Math.min(dist, this.speed * dt)
+                this.x += (dx / dist) * step
+                this.y += (dy / dist) * step
+            }
+        }
+        const size = this.currentSize()
+        this.canHit({ x: this.x - size / 2, y: this.y - size / 2, width: size, height: size })
+    }
+
+    render(ctx: CanvasRenderingContext2D): void {
+        const size = this.currentSize()
+        const alpha = this.age > 8.7 ? Math.max(0, (10.0 - this.age) / 1.3) : 1
+        ctx.save()
+        ctx.translate(this.x, this.y)
+        ctx.rotate(Math.sin(this.age * 11) * 0.22)
+        ctx.globalAlpha = alpha
+        if (this.isLoaded() && this.image.naturalWidth > 0) {
+            ctx.drawImage(this.image, -size / 2, -size / 2, size, size)
+        } else {
+            ctx.fillStyle = 'rgba(255, 228, 170, 0.95)'
+            ctx.beginPath()
+            ctx.arc(0, 0, size / 2, 0, Math.PI * 2)
+            ctx.fill()
+        }
+        ctx.restore()
+    }
+
+    private currentSize() {
+        const base = Math.max(228, Math.min(396, Math.min(this.canvas.width, this.canvas.height) * 0.33))
+        if (this.age < 0.55) return base * (0.2 + 0.8 * Math.sin((this.age / 0.55) * Math.PI / 2))
+        if (this.age > 8.7) return base * Math.max(0.05, (10.0 - this.age) / 1.3)
+        return base
+    }
+
+    private pickTarget() {
+        const midX = this.canvas.width / 2
+        const midY = this.canvas.height / 2
+        const currentQuadrant = (this.x >= midX ? 1 : 0) + (this.y >= midY ? 2 : 0)
+        const options = [0, 1, 2, 3].filter(q => q !== currentQuadrant)
+        const q = options[Math.floor(Math.random() * options.length)] ?? 0
+        const left = q % 2 === 0 ? 0 : midX
+        const top = q < 2 ? 0 : midY
+        return {
+            x: left + 70 + Math.random() * Math.max(20, midX - 140),
+            y: top + 70 + Math.random() * Math.max(20, midY - 140),
+        }
+    }
+}
+
 export class SpaceGame {
     private canvas: HTMLCanvasElement
     private ctx: CanvasRenderingContext2D
@@ -222,6 +360,13 @@ export class SpaceGame {
 
     private bgImage = new Image()
     private bgLoaded = false
+    private cannonImage = new Image()
+    private cannonLoaded = false
+    private tarouImage = new Image()
+    private tarouLoaded = false
+    private cannonAngle = -Math.PI / 2
+    private cannonPopTime = 0
+    private cannonPopDuration = 0.34
     private enemyImages: Record<string, HTMLImageElement> = {}
     private enemyImagesLoaded: Record<string, boolean> = {}
 
@@ -243,12 +388,13 @@ export class SpaceGame {
     private uiSoundFetchTimer = 0
     private lastRestartSignal = -1
     private gameFlowFetchTimer = 0
-    private gameFlow: GameFlowState = { phase: 'playing', result: null, difficulty: 'normal', signal: 0 }
+    private gameFlow: GameFlowState = { phase: 'playing', result: null, difficulty: 'normal', signal: 0, totalPlaySeconds: 0, attemptCount: 0, shouldHandoff: false }
     private lastGameFlowSignal = -1
     private tutorialEnemyId: number | null = null
     private tutorialCompletePending = false
     private tutorialHitCount = 0
     private lastTutorialPromptIndex = -1
+    private tutorialProgressPostedIndex = -1
     private audioCache = new Map<string, HTMLAudioElement>()
     private currentBgmKey: string | null = null
     private currentBackgroundPath = ''
@@ -266,6 +412,12 @@ export class SpaceGame {
         this.bgImage.crossOrigin = 'anonymous'
         this.bgImage.onload = () => { this.bgLoaded = true }
         this.updateBackgroundImage()
+        this.cannonImage.crossOrigin = 'anonymous'
+        this.cannonImage.onload = () => { this.cannonLoaded = true }
+        this.cannonImage.src = CANNON_IMAGE_PATH
+        this.tarouImage.crossOrigin = 'anonymous'
+        this.tarouImage.onload = () => { this.tarouLoaded = true }
+        this.tarouImage.src = TAROU_IMAGE_PATH
 
         this.ensureEnemyImages(DEFAULT_CONFIG.enemies)
         this.resetSpawnTimers(DEFAULT_CONFIG.enemies)
@@ -578,7 +730,7 @@ export class SpaceGame {
         }
     }
 
-    private async postGameFlow(payload: Partial<GameFlowState> & { phase: GameFlowPhase }) {
+    private async postGameFlow(payload: Partial<GameFlowState> & { phase: GameFlowPhase; play_seconds?: number }) {
         try {
             await fetch(GAME_FLOW_URL, {
                 method: 'POST',
@@ -606,7 +758,37 @@ export class SpaceGame {
         const startY = this.canvas.height
         for (const shot of batch) {
             this.playSound('fruitShoot', shot.fruitType)
+            if (shot.velocityX != null || shot.velocityY != null) {
+                const vx = shot.velocityX ?? 0
+                const vy = shot.velocityY ?? -1
+                this.cannonAngle = Math.atan2(vy, vx) + Math.PI / 2
+                this.cannonPopTime = this.cannonPopDuration
+            }
+            if (shot.fruitType === 'berry') {
+                this.spawnBerrySpread(startY, shot)
+                continue
+            }
             this.bullets.push(new DrawnBullet(0, startY, shot))
+        }
+    }
+
+    private spawnBerrySpread(startY: number, shot: ShotBatch[number]) {
+        const vx = shot.velocityX ?? 0
+        const vy = shot.velocityY ?? -1
+        const baseAngle = Math.atan2(vy, vx)
+        const offsets = [-0.24, 0, 0.24]
+        for (const offset of offsets) {
+            for (let i = 0; i < 3; i++) {
+                const angle = baseAngle + offset + (i - 1) * 0.035
+                const spreadShot = {
+                    ...shot,
+                    velocityX: Math.cos(angle),
+                    velocityY: Math.sin(angle),
+                    originX: shot.originX + (i - 1) * shot.width * 0.18,
+                    originY: shot.originY + Math.abs(i - 1) * shot.height * 0.08,
+                }
+                this.bullets.push(new DrawnBullet(0, startY, spreadShot))
+            }
         }
     }
 
@@ -660,7 +842,23 @@ export class SpaceGame {
         this.tutorialCompletePending = false
         this.tutorialHitCount = 0
         this.lastTutorialPromptIndex = -1
+        this.tutorialProgressPostedIndex = -1
+        void this.postTutorialState(0)
         this.spawnTutorialEnemy()
+    }
+
+    private async postTutorialState(index: number) {
+        if (this.tutorialProgressPostedIndex === index) return
+        this.tutorialProgressPostedIndex = index
+        try {
+            await fetch('http://127.0.0.1:8030/api/tutorial-state', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ index }),
+            })
+        } catch {
+            // Draw screen will keep the previous tutorial step until the next successful sync.
+        }
     }
 
     private spawnTutorialEnemy() {
@@ -670,6 +868,9 @@ export class SpaceGame {
         this.tutorialEnemyId = this.enemyCounter++
         const promptIndex = Math.min(this.tutorialHitCount, TUTORIAL_FRUIT_ORDER.length - 1)
         const requiredFruit = TUTORIAL_FRUIT_ORDER[promptIndex] as SpaceEnemyRequirement
+        const baseX = requiredFruit === 'grape'
+            ? Math.min(this.canvas.width - size / 2, this.canvas.width * 0.72)
+            : this.canvas.width / 2
         if (this.lastTutorialPromptIndex !== promptIndex) {
             this.lastTutorialPromptIndex = promptIndex
             this.playSound(this.getTutorialPromptSoundKey())
@@ -681,7 +882,7 @@ export class SpaceGame {
             requiredFruit,
             isBoss: false,
             hasHp: false,
-            baseX: this.canvas.width / 2,
+            baseX,
             y: Math.max(82, this.canvas.height * 0.2),
             baseSize: size,
             speed: 0,
@@ -784,6 +985,9 @@ export class SpaceGame {
         if (this.uiSoundFetchTimer >= 0.12) {
             this.uiSoundFetchTimer = 0
             void this.fetchUiSoundEvents()
+        }
+        if (this.cannonPopTime > 0) {
+            this.cannonPopTime = Math.max(0, this.cannonPopTime - dt)
         }
         if (
             (this.gameFlow.phase === 'tutorial' || this.gameFlow.phase === 'handoff' || this.gameFlow.phase === 'difficulty')
@@ -907,6 +1111,9 @@ export class SpaceGame {
             const killed = this.killEnemy(e)
             this.effects.push(new ExplosionEffect(cx, cy, size * 0.45, 'apple'))
             if (killed && e.isBoss) this.triggerGameClear()
+        } else if (b.fruitType === 'lemon') {
+            b.markConsumed()
+            this.resolveLemonBeam(b)
         } else if (b.fruitType === 'apple') {
             b.markConsumed()
             this.playSound('applePop')
@@ -919,6 +1126,12 @@ export class SpaceGame {
             this.effects.push(new FruitPopEffect(b, cx, cy, 0.32, 1, 0.62, 1.26, () => {
                 this.resolveGrapeBurst(b, cx, cy)
             }))
+        } else if (b.fruitType === 'peach') {
+            b.markConsumed()
+            this.playSound('fruitHit', b.fruitType)
+            this.effects.push(new FruitPopEffect(b, cx, cy, 0.42, 1, 0.58, 1.24, () => {
+                this.spawnTarou(cx, cy, b)
+            }))
         } else {
             // Static fruits: simple hit
             this.playSound('fruitHit', b.fruitType)
@@ -926,6 +1139,62 @@ export class SpaceGame {
             b.markConsumed()
             if (killed && e.isBoss) this.triggerGameClear()
         }
+    }
+
+    private resolveLemonBeam(b: DrawnBullet) {
+        this.playSound('fruitHit', 'lemon')
+        const sx = b.centerX
+        const sy = b.centerY
+        const dx = b.directionX
+        const dy = b.directionY
+        const length = Math.hypot(this.canvas.width, this.canvas.height) * 1.45
+        this.effects.push(new LemonBeamEffect(sx, sy, dx, dy, length))
+        for (const enemy of this.enemies) {
+            if (enemy.markedForDeletion || enemy.dying) continue
+            if (!this.canBulletKillEnemy(b, enemy)) continue
+            const bounds = this.enemyBounds(enemy)
+            if (this.distanceFromPointToRay(bounds.cx, bounds.cy, sx, sy, dx, dy) <= bounds.size * 0.52 + 16) {
+                const killed = this.killEnemy(enemy)
+                if (killed && enemy.isBoss) this.triggerGameClear()
+            }
+        }
+    }
+
+    private spawnTarou(cx: number, cy: number, sourceBullet: DrawnBullet) {
+        const hpEnemyLastHitAt = new Map<number, number>()
+        this.effects.push(new PeachTarouEffect(
+            cx,
+            cy,
+            this.tarouImage,
+            () => this.tarouLoaded,
+            this.canvas,
+            (target) => {
+                for (const enemy of this.enemies) {
+                    if (enemy.markedForDeletion || enemy.dying) continue
+                    if (!this.canBulletKillEnemy(sourceBullet, enemy)) continue
+                    const bounds = this.enemyBounds(enemy)
+                    if (!this.aabbOverlap(target, { x: bounds.x, y: bounds.y, width: bounds.size, height: bounds.size })) continue
+                    if (enemy.hasHp || enemy.isBoss) {
+                        const lastHitAt = hpEnemyLastHitAt.get(enemy.id) ?? -Infinity
+                        if (this.elapsed - lastHitAt < 0.85) continue
+                        hpEnemyLastHitAt.set(enemy.id, this.elapsed)
+                    }
+                    const killed = this.killEnemy(enemy)
+                    this.effects.push(new ExplosionEffect(bounds.cx, bounds.cy, bounds.size * 0.42, 'apple'))
+                    if (killed && enemy.isBoss) this.triggerGameClear()
+                }
+            },
+        ))
+    }
+
+    private distanceFromPointToRay(px: number, py: number, sx: number, sy: number, dx: number, dy: number) {
+        const vx = px - sx
+        const vy = py - sy
+        const along = vx * dx + vy * dy
+        if (along < 0) return Infinity
+        const closestX = sx + dx * along
+        const closestY = sy + dy * along
+        return Math.hypot(px - closestX, py - closestY)
     }
 
     private resolveAppleExplosion(b: DrawnBullet, cx: number, cy: number) {
@@ -988,6 +1257,7 @@ export class SpaceGame {
         this.score++
         if (enemy.configId === 'tutorial') {
             this.tutorialHitCount += 1
+            void this.postTutorialState(Math.min(this.tutorialHitCount, TUTORIAL_FRUIT_ORDER.length - 1))
             if (this.tutorialHitCount >= TUTORIAL_FRUIT_ORDER.length) {
                 this.tutorialCompletePending = true
                 window.setTimeout(() => {
@@ -1014,7 +1284,7 @@ export class SpaceGame {
         this.gameOver = true
         this.gameClear = false
         this.retryButton.style.display = 'none'
-        void this.postGameFlow({ phase: 'ended', result: 'over', difficulty: this.gameFlow.difficulty })
+        void this.postGameFlow({ phase: 'ended', result: 'over', difficulty: this.gameFlow.difficulty, play_seconds: this.elapsed })
     }
 
     private triggerGameClear() {
@@ -1023,7 +1293,7 @@ export class SpaceGame {
         this.gameClear = true
         this.retryButton.style.display = 'none'
         void this.incrementBossDefeatCount()
-        void this.postGameFlow({ phase: 'ended', result: 'clear', difficulty: this.gameFlow.difficulty })
+        void this.postGameFlow({ phase: 'ended', result: 'clear', difficulty: this.gameFlow.difficulty, play_seconds: this.elapsed })
     }
 
     private restart() {
@@ -1086,6 +1356,7 @@ export class SpaceGame {
         for (const ef of this.effects) ef.render(ctx)
         for (const s of this.shards) s.render(ctx)
         for (const b of this.bullets) b.render(ctx)
+        this.renderCannon()
 
         this.renderHUD()
         if (this.feverActive) {
@@ -1139,6 +1410,34 @@ export class SpaceGame {
             ctx.fillText(sub, w / 2, h / 2 + 82)
             ctx.restore()
         }
+    }
+
+    private renderCannon() {
+        const { ctx, canvas } = this
+        const size = Math.max(110, Math.min(190, Math.min(canvas.width, canvas.height) * 0.16))
+        const x = canvas.width / 2
+        const y = canvas.height - size * 0.28
+        const popRatio = this.cannonPopDuration > 0 ? this.cannonPopTime / this.cannonPopDuration : 0
+        const pop = popRatio > 0 ? Math.sin(popRatio * Math.PI) * 0.18 : 0
+        ctx.save()
+        ctx.translate(x, y)
+        ctx.rotate(this.cannonAngle)
+        ctx.scale(1 + pop, 1 + pop)
+        ctx.shadowColor = 'rgba(0,0,0,0.45)'
+        ctx.shadowBlur = 18
+        if (this.cannonLoaded && this.cannonImage.naturalWidth > 0) {
+            ctx.drawImage(this.cannonImage, -size / 2, -size / 2, size, size)
+        } else {
+            ctx.fillStyle = 'rgba(180, 190, 210, 0.92)'
+            ctx.beginPath()
+            ctx.roundRect(-size * 0.22, -size * 0.48, size * 0.44, size * 0.86, size * 0.12)
+            ctx.fill()
+            ctx.fillStyle = 'rgba(90, 100, 122, 0.96)'
+            ctx.beginPath()
+            ctx.arc(0, size * 0.18, size * 0.28, 0, Math.PI * 2)
+            ctx.fill()
+        }
+        ctx.restore()
     }
 
     private renderFeverBorder() {

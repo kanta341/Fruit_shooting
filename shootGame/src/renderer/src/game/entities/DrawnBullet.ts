@@ -8,9 +8,8 @@ export class DrawnBullet extends Entity {
         grape: 0.85,
         berry: 0.7,
         lemon: 0.7,
-        orange: 0.7,
         peach: 0.7,
-        suika: 1.3,
+        dorian: 1.3,
     }
 
     speed: number = 400
@@ -20,23 +19,33 @@ export class DrawnBullet extends Entity {
     rotation: number
     rotationSpeed: number
     hasTriggeredPrimaryEffect = false
+    private velocityX: number
+    private velocityY: number
     private sprite: HTMLCanvasElement
     private hitEnemyIds = new Set<number>()
 
     constructor(startX: number, startY: number, shot: ShotPayload) {
-        super(startX + shot.originX, startY + shot.originY, shot.width, shot.height)
+        const initialX = shot.launchX == null ? startX + shot.originX : shot.launchX - shot.width / 2
+        const initialY = shot.launchY == null ? startY + shot.originY : shot.launchY - shot.height / 2
+        super(initialX, initialY, shot.width, shot.height)
         this.sprite = shot.sprite
         this.fruitType = shot.fruitType
         this.imageId = shot.imageId
         this.power = this.computePower(shot.width, shot.height, shot.fruitType)
         this.rotation = 0
         this.rotationSpeed = shot.fruitType === 'banana' ? Math.PI * 5.5 : 0
+        const vx = shot.velocityX ?? 0
+        const vy = shot.velocityY ?? -1
+        const len = Math.hypot(vx, vy) || 1
+        this.velocityX = vx / len
+        this.velocityY = vy / len
     }
 
     update(dt: number): void {
-        this.y -= this.speed * dt
+        this.x += this.velocityX * this.speed * dt
+        this.y += this.velocityY * this.speed * dt
         this.rotation += this.rotationSpeed * dt
-        if (this.y + this.height < 0) {
+        if (this.y + this.height < 0 || this.x + this.width < 0 || this.x > window.innerWidth) {
             this.markedForDeletion = true
         }
     }
@@ -67,6 +76,14 @@ export class DrawnBullet extends Entity {
 
     get centerY() {
         return this.y + this.height / 2
+    }
+
+    get directionX() {
+        return this.velocityX
+    }
+
+    get directionY() {
+        return this.velocityY
     }
 
     hasHitEnemy(enemyId: number) {
