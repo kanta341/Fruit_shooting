@@ -118,6 +118,7 @@ export type SpaceEnemyConfig = {
     spawnRateChange: number  // interval change per 60s of active time (negative = more frequent)
     sizeScale: number
     speedScale: number
+    focusedSpawn?: boolean
 }
 
 export type SpaceSpeedConfig = {
@@ -132,11 +133,11 @@ export type SpaceGameConfig = {
 
 const DEFAULT_CONFIG: SpaceGameConfig = {
     enemies: [
-        { id: 'normal', label: 'ノーマル', enabled: true, imagePath: 'enemy/normal_enemy.png', requiredFruit: null, isBoss: false, hasHp: false, hp: 1, difficultyMode: 'all', spawnInterval: 6.0, spawnStart: 0, spawnEnd: 0, spawnRateChange: -0.20, sizeScale: 1.0, speedScale: 1.0 },
-        { id: 'apple', label: 'りんご専用', enabled: true, imagePath: 'enemy/apple_enemy.png', requiredFruit: 'apple', isBoss: false, hasHp: false, hp: 1, difficultyMode: 'all', spawnInterval: 12.0, spawnStart: 15, spawnEnd: 0, spawnRateChange: -0.20, sizeScale: 1.0, speedScale: 1.0 },
-        { id: 'banana', label: 'バナナ専用', enabled: true, imagePath: 'enemy/banana_enemy.png', requiredFruit: 'banana', isBoss: false, hasHp: false, hp: 1, difficultyMode: 'all', spawnInterval: 12.0, spawnStart: 15, spawnEnd: 0, spawnRateChange: -0.20, sizeScale: 1.0, speedScale: 1.0 },
-        { id: 'grape', label: 'ぶどう専用', enabled: true, imagePath: 'enemy/grape_enemy.png', requiredFruit: 'grape', isBoss: false, hasHp: false, hp: 1, difficultyMode: 'all', spawnInterval: 15.0, spawnStart: 20, spawnEnd: 0, spawnRateChange: -0.20, sizeScale: 1.0, speedScale: 1.0 },
-        { id: 'boss', label: 'ボス', enabled: true, imagePath: 'enemy/boss_enemy.png', requiredFruit: null, isBoss: true, hasHp: true, hp: 20, difficultyMode: 'all', spawnInterval: 0, spawnStart: 120, spawnEnd: 0, spawnRateChange: 0, sizeScale: 1.5, speedScale: 0.6 },
+        { id: 'normal', label: 'ノーマル', enabled: true, imagePath: 'enemy/normal_enemy.png', requiredFruit: null, isBoss: false, hasHp: false, hp: 1, difficultyMode: 'all', spawnInterval: 6.0, spawnStart: 0, spawnEnd: 0, spawnRateChange: -0.20, sizeScale: 1.0, speedScale: 1.0, focusedSpawn: false },
+        { id: 'apple', label: 'りんご専用', enabled: true, imagePath: 'enemy/apple_enemy.png', requiredFruit: 'apple', isBoss: false, hasHp: false, hp: 1, difficultyMode: 'all', spawnInterval: 12.0, spawnStart: 15, spawnEnd: 0, spawnRateChange: -0.20, sizeScale: 1.0, speedScale: 1.0, focusedSpawn: false },
+        { id: 'banana', label: 'バナナ専用', enabled: true, imagePath: 'enemy/banana_enemy.png', requiredFruit: 'banana', isBoss: false, hasHp: false, hp: 1, difficultyMode: 'all', spawnInterval: 12.0, spawnStart: 15, spawnEnd: 0, spawnRateChange: -0.20, sizeScale: 1.0, speedScale: 1.0, focusedSpawn: false },
+        { id: 'grape', label: 'ぶどう専用', enabled: true, imagePath: 'enemy/grape_enemy.png', requiredFruit: 'grape', isBoss: false, hasHp: false, hp: 1, difficultyMode: 'all', spawnInterval: 15.0, spawnStart: 20, spawnEnd: 0, spawnRateChange: -0.20, sizeScale: 1.0, speedScale: 1.0, focusedSpawn: false },
+        { id: 'boss', label: 'ボス', enabled: true, imagePath: 'enemy/boss_enemy.png', requiredFruit: null, isBoss: true, hasHp: true, hp: 20, difficultyMode: 'all', spawnInterval: 0, spawnStart: 120, spawnEnd: 0, spawnRateChange: 0, sizeScale: 1.5, speedScale: 0.6, focusedSpawn: false },
     ],
     speedConfig: { initialSpeed: 14, maxSpeed: 44 },
 }
@@ -799,7 +800,7 @@ export class SpaceGame {
         const speed = (initialSpeed + (maxSpeed - initialSpeed) * progress) * config.speedScale * difficulty.speed
         const sizeVariant = config.isBoss ? 1.0 : SIZE_VARIANTS[Math.floor(Math.random() * SIZE_VARIANTS.length)]
         const baseSize = BASE_ENEMY_SIZE * sizeVariant * config.sizeScale
-        const baseX = baseSize / 2 + Math.random() * Math.max(0, this.canvas.width - baseSize)
+        const baseX = this.pickEnemySpawnX(config, baseSize)
         const hasHp = Boolean(config.hasHp || config.isBoss)
         const maxHp = Math.max(1, Number(config.hp ?? (config.isBoss ? BOSS_MAX_HP : 1)))
         this.enemies.push({
@@ -825,6 +826,31 @@ export class SpaceGame {
             this.playSound('bossEnter')
             this.playBgm('bgmBoss')
         }
+    }
+
+    private pickEnemySpawnX(config: SpaceEnemyConfig, baseSize: number) {
+        const canvasWidth = Math.max(1, this.canvas.width)
+        const half = baseSize / 2
+        const safeLeft = Math.max(half, canvasWidth * 0.10)
+        const safeRight = Math.min(canvasWidth - half, canvasWidth * 0.90)
+        if (safeRight <= safeLeft) return canvasWidth / 2
+        let left = safeLeft
+        let right = safeRight
+        if (config.focusedSpawn) {
+            const bandWidth = (safeRight - safeLeft) / 4
+            const bandIndex = this.focusedSpawnBand(config.id)
+            left = safeLeft + bandWidth * bandIndex
+            right = left + bandWidth
+        }
+        return left + Math.random() * Math.max(0, right - left)
+    }
+
+    private focusedSpawnBand(id: string) {
+        let hash = 0
+        for (let i = 0; i < id.length; i += 1) {
+            hash = (hash * 31 + id.charCodeAt(i)) | 0
+        }
+        return Math.abs(hash) % 4
     }
 
     private startTutorial() {

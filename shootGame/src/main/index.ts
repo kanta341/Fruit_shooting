@@ -111,6 +111,7 @@ type SpaceEnemyConfig = {
     spawnRateChange: number
     sizeScale: number
     speedScale: number
+    focusedSpawn: boolean
 }
 
 type SpaceSpeedConfig = {
@@ -140,11 +141,11 @@ type SpaceConfigPreset = {
 
 const DEFAULT_SPACE_GAME_CONFIG: SpaceGameConfig = {
     enemies: [
-        { id: 'normal', label: 'ノーマル', enabled: true, imagePath: 'enemy/normal_enemy.png', requiredFruit: null, isBoss: false, hasHp: false, hp: 1, difficultyMode: 'all', spawnInterval: 6.0, spawnStart: 0, spawnEnd: 0, spawnRateChange: -0.20, sizeScale: 1.0, speedScale: 1.0 },
-        { id: 'apple', label: 'りんご専用', enabled: true, imagePath: 'enemy/apple_enemy.png', requiredFruit: 'apple', isBoss: false, hasHp: false, hp: 1, difficultyMode: 'all', spawnInterval: 12.0, spawnStart: 15, spawnEnd: 0, spawnRateChange: -0.20, sizeScale: 1.0, speedScale: 1.0 },
-        { id: 'banana', label: 'バナナ専用', enabled: true, imagePath: 'enemy/banana_enemy.png', requiredFruit: 'banana', isBoss: false, hasHp: false, hp: 1, difficultyMode: 'all', spawnInterval: 12.0, spawnStart: 15, spawnEnd: 0, spawnRateChange: -0.20, sizeScale: 1.0, speedScale: 1.0 },
-        { id: 'grape', label: 'ぶどう専用', enabled: true, imagePath: 'enemy/grape_enemy.png', requiredFruit: 'grape', isBoss: false, hasHp: false, hp: 1, difficultyMode: 'all', spawnInterval: 15.0, spawnStart: 20, spawnEnd: 0, spawnRateChange: -0.20, sizeScale: 1.0, speedScale: 1.0 },
-        { id: 'boss', label: 'ボス', enabled: true, imagePath: 'enemy/boss_enemy.png', requiredFruit: null, isBoss: true, hasHp: true, hp: 20, difficultyMode: 'all', spawnInterval: 0, spawnStart: 120, spawnEnd: 0, spawnRateChange: 0, sizeScale: 1.5, speedScale: 0.6 },
+        { id: 'normal', label: 'ノーマル', enabled: true, imagePath: 'enemy/normal_enemy.png', requiredFruit: null, isBoss: false, hasHp: false, hp: 1, difficultyMode: 'all', spawnInterval: 6.0, spawnStart: 0, spawnEnd: 0, spawnRateChange: -0.20, sizeScale: 1.0, speedScale: 1.0, focusedSpawn: false },
+        { id: 'apple', label: 'りんご専用', enabled: true, imagePath: 'enemy/apple_enemy.png', requiredFruit: 'apple', isBoss: false, hasHp: false, hp: 1, difficultyMode: 'all', spawnInterval: 12.0, spawnStart: 15, spawnEnd: 0, spawnRateChange: -0.20, sizeScale: 1.0, speedScale: 1.0, focusedSpawn: false },
+        { id: 'banana', label: 'バナナ専用', enabled: true, imagePath: 'enemy/banana_enemy.png', requiredFruit: 'banana', isBoss: false, hasHp: false, hp: 1, difficultyMode: 'all', spawnInterval: 12.0, spawnStart: 15, spawnEnd: 0, spawnRateChange: -0.20, sizeScale: 1.0, speedScale: 1.0, focusedSpawn: false },
+        { id: 'grape', label: 'ぶどう専用', enabled: true, imagePath: 'enemy/grape_enemy.png', requiredFruit: 'grape', isBoss: false, hasHp: false, hp: 1, difficultyMode: 'all', spawnInterval: 15.0, spawnStart: 20, spawnEnd: 0, spawnRateChange: -0.20, sizeScale: 1.0, speedScale: 1.0, focusedSpawn: false },
+        { id: 'boss', label: 'ボス', enabled: true, imagePath: 'enemy/boss_enemy.png', requiredFruit: null, isBoss: true, hasHp: true, hp: 20, difficultyMode: 'all', spawnInterval: 0, spawnStart: 120, spawnEnd: 0, spawnRateChange: 0, sizeScale: 1.5, speedScale: 0.6, focusedSpawn: false },
     ],
     speedConfig: { initialSpeed: 14, maxSpeed: 44 },
 }
@@ -223,6 +224,7 @@ const normalizeSpaceGameConfig = (incoming: unknown): SpaceGameConfig => {
             difficultyMode: 'all' as SpaceDifficultyMode,
             sizeScale: type === 'boss' ? 1.5 : 1.0,
             speedScale: type === 'boss' ? 0.6 : 1.0,
+            focusedSpawn: false,
             ...src.enemyTypes?.[type],
         }))
     const enemies = rawEnemies.map((raw, index) => {
@@ -248,6 +250,7 @@ const normalizeSpaceGameConfig = (incoming: unknown): SpaceGameConfig => {
             spawnRateChange: clampFinite(item.spawnRateChange, 0, -10, 10),
             sizeScale: clampFinite(item.sizeScale, isBoss ? 1.5 : 1, 0.1, 5),
             speedScale: clampFinite(item.speedScale, isBoss ? 0.6 : 1, 0.05, 5),
+            focusedSpawn: Boolean(item.focusedSpawn),
         }
     })
     return { enemies: enemies.length > 0 ? enemies : defaultConfig.enemies, speedConfig }
@@ -829,6 +832,7 @@ class PythonPredictWorker {
 }
 
 const predictor = new PythonPredictWorker()
+let remoteDrawWarmupPromise: Promise<{ ok: true; timings: Record<string, number> }> | null = null
 
 const appendControlLog = (message: string) => {
     const timestamp = new Date().toISOString()
@@ -882,6 +886,80 @@ const buildRemoteDrawStats = (): RemoteDrawStats => {
     }
 }
 
+const buildRemoteDrawWarmupImage = () => {
+    const candidates = [
+        resolve(__dirname, '../../space_data/sample/guide.png'),
+        resolve(__dirname, '../../space_data/sample_fruit/berry.png'),
+    ]
+    const filePath = candidates.find((candidate) => existsSync(candidate))
+    if (!filePath) {
+        throw new Error('Warmup image not found')
+    }
+    return `data:image/png;base64,${readFileSync(filePath).toString('base64')}`
+}
+
+const buildRemoteDrawWarmupPayload = (
+    image: string,
+    overrides: Partial<PredictRequest>,
+): PredictRequest => ({
+    image,
+    sketch_overlay: '',
+    bbox: {
+        left: 44,
+        top: 22,
+        right: 236,
+        bottom: 136,
+        width: 192,
+        height: 114,
+    },
+    image_id: 'warmup',
+    fruit_name: 'apple',
+    judge_mode: 'judge',
+    predict_mode: 'generated',
+    generated_variant: 'apple_512',
+    banana_postprocess: true,
+    keep_largest: true,
+    alpha_keep_largest: false,
+    apple_skip_inner_alpha: false,
+    apple_skip_radial_variance: false,
+    apple_radial_variance_threshold: 50,
+    non_alpha_mode: false,
+    apple_align_input_fill: false,
+    border_threshold: remoteDrawConfig.generatedBorderThreshold,
+    alpha_threshold: remoteDrawConfig.generatedAlphaThreshold,
+    canvas_width: REMOTE_DRAW_PROCESSING_WIDTH,
+    canvas_height: REMOTE_DRAW_PROCESSING_HEIGHT,
+    ...overrides,
+})
+
+const warmupRemoteDrawPredictor = async () => {
+    const image = buildRemoteDrawWarmupImage()
+    const timings: Record<string, number> = {}
+    appendControlLog('remote draw warmup started')
+
+    const runWarmup = async (name: string, payload: PredictRequest) => {
+        const startedAt = performance.now()
+        await predictor.predict(payload)
+        timings[name] = Number((performance.now() - startedAt).toFixed(1))
+    }
+
+    await runWarmup('judge', buildRemoteDrawWarmupPayload(image, {
+        image_id: 'warmup_judge',
+        fruit_name: 'banana',
+        predict_mode: 'judge',
+        generated_variant: undefined,
+    }))
+    await runWarmup('generated_models', buildRemoteDrawWarmupPayload(image, {
+        image_id: 'warmup_generated',
+        fruit_name: 'apple',
+        predict_mode: 'generated',
+        generated_variant: 'apple_512',
+    }))
+
+    appendControlLog(`remote draw warmup completed ${JSON.stringify(timings)}`)
+    return { ok: true as const, timings }
+}
+
 const renderGameControlPage = () => {
     const configSetJson = JSON.stringify(spaceGameConfigs)
     const defaultConfigJson = JSON.stringify(DEFAULT_SPACE_GAME_CONFIG)
@@ -922,7 +1000,7 @@ const renderGameControlPage = () => {
         .enemy-list { display: grid; gap: 12px; }
         .enemy-row {
             display: grid;
-            grid-template-columns: 82px minmax(110px, 1fr) minmax(150px, 1.5fr) repeat(3, minmax(64px, 0.55fr)) repeat(7, minmax(74px, 0.7fr)) 56px;
+            grid-template-columns: 82px minmax(110px, 1fr) minmax(150px, 1.5fr) repeat(4, minmax(64px, 0.55fr)) repeat(7, minmax(74px, 0.7fr)) 56px;
             gap: 8px;
             align-items: center;
             padding: 10px;
@@ -1158,7 +1236,7 @@ const renderGameControlPage = () => {
 
         function renderEnemies() {
             const list = document.getElementById('enemyList');
-            list.innerHTML = '<div class="enemy-row header"><div>画像</div><div>名前</div><div>画像ファイル</div><div>有効</div><div>ボス</div><div>体力</div><div>HP</div><div>間隔</div><div>開始</div><div>終了</div><div>変化</div><div>大きさ</div><div>速度</div><div></div></div>';
+            list.innerHTML = '<div class="enemy-row header"><div>画像</div><div>名前</div><div>画像ファイル</div><div>有効</div><div>ボス</div><div>体力</div><div>集中</div><div>HP</div><div>間隔</div><div>開始</div><div>終了</div><div>変化</div><div>大きさ</div><div>速度</div><div></div></div>';
             currentConfig.enemies.forEach((enemy, index) => {
                 const row = document.createElement('div');
                 row.className = 'enemy-row';
@@ -1171,6 +1249,7 @@ const renderGameControlPage = () => {
                     '<label class="check-wrap"><input type="checkbox" data-field="enabled"' + (enemy.enabled ? ' checked' : '') + '></label>' +
                     '<label class="check-wrap"><input type="checkbox" data-field="isBoss"' + (enemy.isBoss ? ' checked' : '') + '></label>' +
                     '<label class="check-wrap"><input type="checkbox" data-field="hasHp"' + (enemy.hasHp ? ' checked' : '') + '></label>' +
+                    '<label class="check-wrap"><input type="checkbox" data-field="focusedSpawn"' + (enemy.focusedSpawn ? ' checked' : '') + '></label>' +
                     '<input class="num" type="number" data-field="hp" value="' + (enemy.hp ?? (enemy.isBoss ? 20 : 1)) + '" min="1" max="500" step="1">' +
                     '<input class="num" type="number" data-field="spawnInterval" value="' + enemy.spawnInterval + '" min="0" max="60" step="0.1">' +
                     '<input class="num" type="number" data-field="spawnStart" value="' + enemy.spawnStart + '" min="0" max="600" step="1">' +
@@ -2000,9 +2079,27 @@ const renderRemoteDrawPage = (draw2 = false) => `<!doctype html>
             min-width: 156px;
             min-height: 78px;
             border-radius: 26px;
-            padding: 18px 34px;
+            padding: 0;
             font-size: 24px;
             letter-spacing: 0.08em;
+            display: grid;
+            place-items: center;
+            line-height: 0;
+            position: absolute;
+            overflow: hidden;
+        }
+        .stage.draw2 #fireButton img,
+        .stage.draw2 #clearButton img {
+            position: absolute;
+            left: 50%;
+            top: 50%;
+            width: 72px;
+            height: 72px;
+            object-fit: contain;
+            display: block;
+            pointer-events: none;
+            transform: translate(-50%, -50%);
+            filter: drop-shadow(0 3px 8px rgba(0, 0, 0, 0.28));
         }
         .stage.draw2 #fireButton {
             left: auto;
@@ -2014,8 +2111,6 @@ const renderRemoteDrawPage = (draw2 = false) => `<!doctype html>
             animation: draw2FireButtonPulse 0.9s ease-in-out infinite;
         }
         .stage.draw2 #clearButton {
-            display: block;
-            position: absolute;
             left: 24px;
             background: rgba(54, 58, 68, 0.86);
             color: #fff;
@@ -2712,6 +2807,73 @@ const renderRemoteDrawPage = (draw2 = false) => `<!doctype html>
             background: rgba(8, 18, 32, 0.54);
             border-color: rgba(126, 226, 255, 0.26);
         }
+        .connection-settings-button {
+            position: absolute;
+            top: max(18px, env(safe-area-inset-top));
+            right: max(18px, env(safe-area-inset-right));
+            z-index: 3;
+            border: 1px solid rgba(255, 255, 255, 0.22);
+            border-radius: 999px;
+            padding: 9px 15px;
+            background: rgba(255, 255, 255, 0.14);
+            color: rgba(255, 255, 255, 0.92);
+            font-family: "Hiragino Sans", "Yu Gothic", sans-serif;
+            font-size: clamp(13px, 1.8vw, 16px);
+            font-weight: 1000;
+            backdrop-filter: blur(8px);
+            box-shadow: 0 12px 28px rgba(0, 0, 0, 0.18);
+        }
+        .connection-choice-actions {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(150px, 1fr));
+            gap: 14px;
+            margin-top: 24px;
+        }
+        .connection-choice-actions .flow-button {
+            min-height: 104px;
+            border-radius: 22px;
+            font-size: clamp(20px, 3.4vw, 32px);
+        }
+        .connection-choice-actions .wired {
+            background: linear-gradient(180deg, #4ade80, #15803d);
+            color: #fff;
+        }
+        .connection-choice-actions .wireless {
+            background: linear-gradient(180deg, #60a5fa, #1d4ed8);
+            color: #fff;
+        }
+        .connection-loading {
+            display: grid;
+            place-items: center;
+            gap: 18px;
+            margin-top: 22px;
+        }
+        .connection-loading-spinner {
+            width: 76px;
+            height: 76px;
+            border-radius: 50%;
+            border: 8px solid rgba(255, 255, 255, 0.2);
+            border-top-color: #ffe66d;
+            border-right-color: #66e6ff;
+            animation: connectionLoadingSpin 0.75s linear infinite;
+        }
+        .connection-loading-text {
+            color: rgba(255, 255, 255, 0.86);
+            font-size: clamp(18px, 2.6vw, 26px);
+            font-weight: 1000;
+            text-align: center;
+        }
+        .connection-error {
+            margin-top: 18px;
+            color: #ffd6d6;
+            font-size: clamp(14px, 2vw, 18px);
+            font-weight: 900;
+            text-align: center;
+            white-space: pre-wrap;
+        }
+        @keyframes connectionLoadingSpin {
+            to { transform: rotate(360deg); }
+        }
         .flow-overlay.phase-difficulty .flow-actions {
             display: grid;
             grid-template-columns: repeat(2, minmax(170px, 1fr));
@@ -2921,6 +3083,36 @@ const renderRemoteDrawPage = (draw2 = false) => `<!doctype html>
         .flow-overlay.phase-tutorial_done.start-ready .flow-copy {
             color: inherit;
         }
+        .flow-overlay.phase-tutorial_done.center-info {
+            align-items: center;
+            padding-top: 36px;
+            background:
+                radial-gradient(circle at 50% 18%, rgba(255, 242, 122, 0.20), transparent 28%),
+                linear-gradient(145deg, rgba(12, 20, 34, 0.68), rgba(18, 32, 48, 0.76));
+            backdrop-filter: blur(4px);
+            pointer-events: auto;
+        }
+        .flow-overlay.phase-tutorial_done.center-info .flow-panel {
+            width: min(760px, 88vw);
+            padding: clamp(28px, 5vw, 48px);
+            border-radius: 28px;
+            background: rgba(255, 255, 255, 0.13);
+            border: 1px solid rgba(255, 255, 255, 0.18);
+            box-shadow: 0 28px 90px rgba(0, 0, 0, 0.34);
+            color: #fff8d7;
+        }
+        .flow-overlay.phase-tutorial_done.center-info .flow-panel::before,
+        .flow-overlay.phase-tutorial_done.center-info .flow-panel::after {
+            display: none;
+        }
+        .flow-overlay.phase-tutorial_done.center-info .flow-title {
+            color: #fff27a;
+            font-size: clamp(34px, 6vw, 62px);
+        }
+        .flow-overlay.phase-tutorial_done.center-info .flow-kicker,
+        .flow-overlay.phase-tutorial_done.center-info .flow-copy {
+            color: inherit;
+        }
         .tutorial-fever-guide {
             display: flex;
             align-items: center;
@@ -2946,6 +3138,92 @@ const renderRemoteDrawPage = (draw2 = false) => `<!doctype html>
             height: 78%;
             object-fit: contain;
             filter: drop-shadow(0 0 12px rgba(255, 242, 122, 0.45));
+        }
+        .tutorial-info-art {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: clamp(12px, 2vw, 20px);
+            width: min(560px, 78vw);
+            margin: 22px auto 0;
+        }
+        .tutorial-info-card {
+            min-height: clamp(96px, 16vw, 150px);
+            border-radius: 18px;
+            display: grid;
+            place-items: center;
+            position: relative;
+            overflow: hidden;
+            background: rgba(255, 255, 255, 0.14);
+            border: 1px solid rgba(255, 255, 255, 0.18);
+            box-shadow: inset 0 0 28px rgba(255, 255, 255, 0.05);
+        }
+        .tutorial-info-card .icon {
+            font-size: clamp(42px, 7vw, 78px);
+            filter: drop-shadow(0 8px 14px rgba(0, 0, 0, 0.28));
+        }
+        .tutorial-info-card .caption {
+            position: absolute;
+            left: 10px;
+            right: 10px;
+            bottom: 10px;
+            font-size: clamp(12px, 1.8vw, 18px);
+            font-weight: 1000;
+            color: rgba(255, 255, 255, 0.88);
+        }
+        .tutorial-effect-art {
+            width: min(560px, 78vw);
+            height: clamp(130px, 22vw, 210px);
+            margin: 22px auto 0;
+            position: relative;
+            border-radius: 22px;
+            overflow: hidden;
+            background:
+                radial-gradient(circle at 32% 48%, rgba(255, 105, 78, 0.48), transparent 18%),
+                radial-gradient(circle at 72% 52%, rgba(160, 105, 255, 0.44), transparent 20%),
+                rgba(255, 255, 255, 0.12);
+            border: 1px solid rgba(255, 255, 255, 0.18);
+        }
+        .tutorial-effect-art::before {
+            content: "";
+            position: absolute;
+            left: 14%;
+            top: 32%;
+            width: 28%;
+            height: 38%;
+            border-radius: 50%;
+            background: radial-gradient(circle, #fff27a 0 12%, #ff5f48 13% 46%, transparent 47%);
+            box-shadow: 0 0 34px rgba(255, 94, 72, 0.78);
+        }
+        .tutorial-effect-art::after {
+            content: "";
+            position: absolute;
+            right: 12%;
+            top: 26%;
+            width: 36%;
+            height: 48%;
+            background:
+                radial-gradient(circle at 18% 46%, #9b6cff 0 8%, transparent 9%),
+                radial-gradient(circle at 36% 30%, #9b6cff 0 8%, transparent 9%),
+                radial-gradient(circle at 48% 58%, #9b6cff 0 8%, transparent 9%),
+                radial-gradient(circle at 66% 36%, #9b6cff 0 8%, transparent 9%),
+                radial-gradient(circle at 80% 66%, #9b6cff 0 8%, transparent 9%);
+            filter: drop-shadow(0 0 18px rgba(171, 112, 255, 0.8));
+        }
+        .tutorial-effect-fruit {
+            position: absolute;
+            z-index: 2;
+            width: clamp(54px, 10vw, 96px);
+            height: clamp(54px, 10vw, 96px);
+            object-fit: contain;
+            filter: drop-shadow(0 10px 18px rgba(0, 0, 0, 0.32));
+        }
+        .tutorial-effect-fruit.apple {
+            left: 15%;
+            top: 18%;
+        }
+        .tutorial-effect-fruit.grape {
+            right: 17%;
+            top: 15%;
         }
         @keyframes tutorialCardPop {
             0%, 100% { transform: translateY(0) scale(1); }
@@ -3114,8 +3392,8 @@ const renderRemoteDrawPage = (draw2 = false) => `<!doctype html>
         <button id="nonAlphaModeToggleButton" class="mode-toggle" type="button" style="bottom:16px;">nonAlpha: OFF</button>
         <button id="centroidDisplayToggleButton" class="mode-toggle" type="button" style="bottom:16px;right:auto;left:16px;">重心表示: OFF</button>
         <canvas id="centroidOverlay" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:13;"></canvas>
-        <button id="clearButton" type="button">クリア</button>
-        <button id="fireButton" type="button">発射</button>
+        <button id="clearButton" type="button" aria-label="クリア"><img src="/api/space-data/back_img/erase_icon_white.png" alt=""></button>
+        <button id="fireButton" type="button" aria-label="発射"><img src="/api/space-data/back_img/rocket_icon_white.png" alt=""></button>
         <button id="productionModeToggleButton" type="button">本番モード</button>
         <div id="judgeProbPanel">
             <div class="judge-prob-title">識別確率</div>
@@ -3274,6 +3552,7 @@ const renderRemoteDrawPage = (draw2 = false) => `<!doctype html>
         let feverEndTimer = null;
         let feverShotIndex = 0;
         let gameFlowPhase = 'playing';
+        let connectionSettingsOpen = false;
         let lastGameFlowSignal = null;
         let tutorialDoneStep = 'cards';
         let tutorialStep = 'draw';
@@ -4535,7 +4814,7 @@ const renderRemoteDrawPage = (draw2 = false) => `<!doctype html>
             gameFlowOverlay.classList.remove('phase-ended', 'phase-handoff', 'phase-difficulty', 'phase-tutorial', 'phase-tutorial_done');
             gameFlowOverlay.classList.remove('result-clear', 'result-over');
             gameFlowOverlay.classList.remove('tutorial-fire-step', 'tutorial-direct-step');
-            gameFlowOverlay.classList.remove('start-ready');
+            gameFlowOverlay.classList.remove('start-ready', 'center-info');
             mainStage.classList.remove('tutorial-card-highlight');
             if (phase) gameFlowOverlay.classList.add('phase-' + phase);
         }
@@ -4549,6 +4828,103 @@ const renderRemoteDrawPage = (draw2 = false) => `<!doctype html>
                 onClick(event);
             });
             return button;
+        }
+        function renderConnectionLoadingPanel(server) {
+            connectionSettingsOpen = true;
+            gameFlowOverlay.innerHTML = '';
+            const panel = document.createElement('section');
+            panel.className = 'flow-panel';
+            const kickerNode = document.createElement('div');
+            kickerNode.className = 'flow-kicker';
+            kickerNode.textContent = 'CONNECTION';
+            const titleNode = document.createElement('h1');
+            titleNode.className = 'flow-title';
+            titleNode.textContent = 'Loading';
+            const copyNode = document.createElement('div');
+            copyNode.className = 'flow-copy';
+            copyNode.textContent = server + ' に接続し、フルーツ生成の準備をしています。';
+            const loadingNode = document.createElement('div');
+            loadingNode.className = 'connection-loading';
+            const spinnerNode = document.createElement('div');
+            spinnerNode.className = 'connection-loading-spinner';
+            const loadingTextNode = document.createElement('div');
+            loadingTextNode.className = 'connection-loading-text';
+            loadingTextNode.textContent = 'Pythonワーカーを起動中...';
+            loadingNode.appendChild(spinnerNode);
+            loadingNode.appendChild(loadingTextNode);
+            panel.appendChild(kickerNode);
+            panel.appendChild(titleNode);
+            panel.appendChild(copyNode);
+            panel.appendChild(loadingNode);
+            gameFlowOverlay.appendChild(panel);
+        }
+        function renderConnectionErrorPanel(server, message, previousDifficulty) {
+            renderConnectionSettingsPanel(previousDifficulty);
+            const panel = gameFlowOverlay.querySelector('.flow-panel');
+            if (!panel) return;
+            const errorNode = document.createElement('div');
+            errorNode.className = 'connection-error';
+            errorNode.textContent = server + ' への接続準備に失敗しました。\\n' + message;
+            panel.appendChild(errorNode);
+        }
+        async function openNativeConnection(server, previousDifficulty) {
+            renderConnectionLoadingPanel(server);
+            try {
+                const response = await fetch('http://' + server + '/api/remote-draw/warmup', {
+                    method: 'POST',
+                    cache: 'no-store',
+                });
+                const data = await response.json().catch(function() { return {}; });
+                if (!response.ok || data.ok === false) {
+                    throw new Error(data.error || 'Warmup failed');
+                }
+                localStorage.setItem('draw2NativeServer', server);
+                window.location.href = 'http://' + server + '/draw2?native=1';
+            } catch (error) {
+                renderConnectionErrorPanel(server, error && error.message ? error.message : String(error), previousDifficulty);
+            }
+        }
+        function renderConnectionSettingsPanel(previousDifficulty) {
+            connectionSettingsOpen = true;
+            gameFlowOverlay.innerHTML = '';
+            const panel = document.createElement('section');
+            panel.className = 'flow-panel';
+            const kickerNode = document.createElement('div');
+            kickerNode.className = 'flow-kicker';
+            kickerNode.textContent = 'CONNECTION';
+            const titleNode = document.createElement('h1');
+            titleNode.className = 'flow-title';
+            titleNode.textContent = '接続方法を選んでください';
+            const copyNode = document.createElement('div');
+            copyNode.className = 'flow-copy';
+            copyNode.textContent = 'IP入力は不要です。環境に合わせて選択してください。';
+            const actionRow = document.createElement('div');
+            actionRow.className = 'connection-choice-actions';
+            actionRow.appendChild(flowButton('有線接続', 'wired', function() { openNativeConnection('192.168.50.1:8030', previousDifficulty); }));
+            actionRow.appendChild(flowButton('無線接続', 'wireless', function() { openNativeConnection('10.100.138.194:8030', previousDifficulty); }));
+            const backRow = document.createElement('div');
+            backRow.className = 'flow-actions';
+            backRow.appendChild(flowButton('戻る', 'secondary', function() {
+                connectionSettingsOpen = false;
+                renderGameFlow({ phase: 'difficulty', difficulty: previousDifficulty || 'normal', result: null, signal: lastGameFlowSignal });
+            }));
+            panel.appendChild(kickerNode);
+            panel.appendChild(titleNode);
+            panel.appendChild(copyNode);
+            panel.appendChild(actionRow);
+            panel.appendChild(backRow);
+            gameFlowOverlay.appendChild(panel);
+        }
+        function appendConnectionSettingsButton(difficulty) {
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'connection-settings-button';
+            button.textContent = '設定';
+            button.addEventListener('click', function() {
+                playPcUiSound('uiButton');
+                renderConnectionSettingsPanel(difficulty);
+            });
+            gameFlowOverlay.appendChild(button);
         }
         function renderFlowPanel(kicker, title, copy, actions, guide) {
             gameFlowOverlay.innerHTML = '';
@@ -4629,7 +5005,7 @@ const renderRemoteDrawPage = (draw2 = false) => `<!doctype html>
         function currentTutorialTitle() {
             const fruit = currentTutorialFruit();
             if (tutorialStep === 'direct') {
-                return fruit === 'grape' ? 'ブドウを斜めに飛ばして' : 'りんごをスワイプして飛ばして';
+                return fruit === 'grape' ? '怪物を狙おう！' : 'りんごをスワイプして飛ばして';
             }
             if (tutorialStep === 'button') return '出てこない時は発射ボタン';
             if (tutorialStep === 'swipe') return tutorialFruitLabel(fruit) + 'をスワイプして飛ばして';
@@ -4648,6 +5024,22 @@ const renderRemoteDrawPage = (draw2 = false) => `<!doctype html>
                 card.appendChild(img);
                 guide.appendChild(card);
             });
+            return guide;
+        }
+        function createTutorialLifeBossGuide() {
+            const guide = document.createElement('div');
+            guide.className = 'tutorial-info-art';
+            guide.innerHTML =
+                '<div class="tutorial-info-card"><div class="icon">♥</div><div class="caption">下まで来るとライフが減る</div></div>' +
+                '<div class="tutorial-info-card"><div class="icon">BOSS</div><div class="caption">ボスを倒すとゲームクリア</div></div>';
+            return guide;
+        }
+        function createTutorialFruitEffectGuide() {
+            const guide = document.createElement('div');
+            guide.className = 'tutorial-effect-art';
+            guide.innerHTML =
+                '<img class="tutorial-effect-fruit apple" src="/api/space-data/fruit_cards/apple.png" alt="りんご">' +
+                '<img class="tutorial-effect-fruit grape" src="/api/space-data/fruit_cards/grape.png" alt="ブドウ">';
             return guide;
         }
         function fruitNameForVariant(variant) {
@@ -4895,7 +5287,7 @@ const renderRemoteDrawPage = (draw2 = false) => `<!doctype html>
             const flowSignalChanged = state.signal !== lastGameFlowSignal;
             if (flowSignalChanged) {
                 lastGameFlowSignal = state.signal;
-                tutorialDoneStep = 'cards';
+                tutorialDoneStep = 'rules';
                 if (state.phase === 'tutorial' || state.phase === 'tutorial_done' || state.phase === 'playing') {
                     resetFruitCards();
                 }
@@ -4908,6 +5300,12 @@ const renderRemoteDrawPage = (draw2 = false) => `<!doctype html>
             if (!DRAW2_MODE) {
                 setGameFlowOverlayVisible(false);
                 return;
+            }
+            if (connectionSettingsOpen && gameFlowPhase === 'difficulty') {
+                return;
+            }
+            if (connectionSettingsOpen && gameFlowPhase !== 'difficulty') {
+                connectionSettingsOpen = false;
             }
             if (gameFlowPhase === 'ended') {
                 const isClear = state.result === 'clear';
@@ -4951,6 +5349,7 @@ const renderRemoteDrawPage = (draw2 = false) => `<!doctype html>
                         flowButton('チャレンジ', 'challenge', async function() { await transitionGameFlow({ phase: 'tutorial', difficulty: 'challenge' }); await clearRemoteSession(); }),
                     ],
                 );
+                appendConnectionSettingsButton(state.difficulty || 'normal');
                 setGameFlowOverlayVisible(true);
             } else if (gameFlowPhase === 'tutorial') {
                 tutorialStep = getTutorialStep();
@@ -4966,8 +5365,9 @@ const renderRemoteDrawPage = (draw2 = false) => `<!doctype html>
                 setGameFlowOverlayVisible(true);
             } else if (gameFlowPhase === 'tutorial_done') {
                 setFlowOverlayPhase('tutorial_done');
-                mainStage.classList.add('tutorial-card-highlight');
+                mainStage.classList.toggle('tutorial-card-highlight', tutorialDoneStep === 'cards');
                 gameFlowOverlay.classList.toggle('start-ready', tutorialDoneStep === 'start');
+                gameFlowOverlay.classList.toggle('center-info', tutorialDoneStep === 'rules' || tutorialDoneStep === 'effects');
                 if (tutorialDoneStep === 'start') {
                     mainStage.classList.remove('tutorial-card-highlight');
                     renderFlowPanel(
@@ -4975,6 +5375,22 @@ const renderRemoteDrawPage = (draw2 = false) => `<!doctype html>
                         'チュートリアル終了',
                         '準備ができたらゲームを始めましょう。',
                         [flowButton('ゲームを始める', '', async function() { resetFruitCards(); await transitionGameFlow({ phase: 'playing', difficulty: state.difficulty || 'normal' }); await clearRemoteSession(); })],
+                    );
+                } else if (tutorialDoneStep === 'rules') {
+                    renderFlowPanel(
+                        'GAME RULE',
+                        'ライフとボスに注意！',
+                        '怪物が下まで来るとライフが減ります。ボスを倒せばゲームクリアです。',
+                        [flowButton('次へ', '', function() { tutorialDoneStep = 'effects'; renderGameFlow(state); })],
+                        createTutorialLifeBossGuide(),
+                    );
+                } else if (tutorialDoneStep === 'effects') {
+                    renderFlowPanel(
+                        'FRUIT POWER',
+                        'フルーツによって効果がかわるよ！',
+                        '爆発したり、たくさん散らばったり、いろいろ試してみよう。',
+                        [flowButton('次へ', '', function() { tutorialDoneStep = 'cards'; renderGameFlow(state); })],
+                        createTutorialFruitEffectGuide(),
                     );
                 } else {
                     renderFlowPanel(
@@ -6622,7 +7038,11 @@ const startControlServer = () => {
                 let nextAttemptCount = previousAttemptCount + (endedAttempt ? 1 : 0)
                 let nextShouldHandoff = gameFlowState.shouldHandoff ?? false
                 if (endedAttempt) {
-                    nextShouldHandoff = nextTotalPlaySeconds >= 80 || (incoming.result === 'over' && nextAttemptCount >= 3)
+                    if (incoming.result === 'clear') {
+                        nextShouldHandoff = true
+                    } else {
+                        nextShouldHandoff = nextAttemptCount >= 3 || (nextAttemptCount >= 2 && nextTotalPlaySeconds > 80)
+                    }
                 }
                 if (gameFlowState.phase === 'handoff' && nextPhase === 'difficulty') {
                     nextTotalPlaySeconds = 0
@@ -6904,6 +7324,27 @@ const startControlServer = () => {
             } catch (error) {
                 writeJson(res, 400, {
                     error: error instanceof Error ? error.message : 'Could not process remote prediction',
+                })
+            }
+            return
+        }
+
+        if ((method === 'POST' || method === 'GET') && url === '/api/remote-draw/warmup') {
+            const startedAt = performance.now()
+            try {
+                if (!remoteDrawWarmupPromise) {
+                    remoteDrawWarmupPromise = warmupRemoteDrawPredictor()
+                }
+                const result = await remoteDrawWarmupPromise
+                writeJson(res, 200, {
+                    ...result,
+                    total_ms: Number((performance.now() - startedAt).toFixed(1)),
+                })
+            } catch (error) {
+                remoteDrawWarmupPromise = null
+                writeJson(res, 500, {
+                    ok: false,
+                    error: error instanceof Error ? error.message : 'Warmup failed',
                 })
             }
             return

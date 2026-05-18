@@ -92,6 +92,30 @@
       box-shadow: 0 14px 30px rgba(0,0,0,.28);
     }
     button.secondary { background: rgba(255,255,255,.18); color: #fff; border: 1px solid rgba(255,255,255,.24); }
+    button:disabled { opacity: .46; }
+    .loading {
+      display: none;
+      place-items: center;
+      gap: 14px;
+      margin-top: 6px;
+    }
+    .loading.is-visible { display: grid; }
+    .spinner {
+      width: 70px;
+      height: 70px;
+      border-radius: 50%;
+      border: 8px solid rgba(255,255,255,.22);
+      border-top-color: #ffe66d;
+      border-right-color: #66e6ff;
+      animation: spin .75s linear infinite;
+    }
+    .loading-text {
+      color: rgba(255,255,255,.88);
+      font-size: clamp(18px, 3vw, 26px);
+      font-weight: 1000;
+      text-align: center;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
     .status {
       min-height: 26px;
       color: rgba(255,255,255,.82);
@@ -114,30 +138,24 @@
 <body>
   <main class="shell">
     <h1>お絵描き画面</h1>
-    <p class="lead">Mac側のゲームを起動してから、MacのIPアドレスを指定して /draw2 を開きます。</p>
-    <label>
-      Mac の接続先
-      <input id="serverInput" autocomplete="off" autocapitalize="off" spellcheck="false" inputmode="url" placeholder="例: 192.168.0.10:8030">
-    </label>
+    <p class="lead">Mac側のゲームを起動してから、接続方法を選んで /draw2 を開きます。</p>
+    <p class="lead">接続方法を選んでください。IP入力は不要です。</p>
     <div class="actions">
-      <button id="openButton">お絵描きを開く</button>
-      <button id="testButton" class="secondary">接続確認</button>
+      <button id="wiredButton">有線接続</button>
+      <button id="wirelessButton" class="secondary">無線接続</button>
+    </div>
+    <div id="loading" class="loading" aria-live="polite">
+      <div class="spinner"></div>
+      <div class="loading-text">Loading</div>
     </div>
     <div id="status" class="status"></div>
     <p class="hint">Type-C接続はインストールとデバッグに使います。通信は同じWi-Fi、またはMac側のネットワーク共有でiPadからMacへアクセスできる状態にしてください。</p>
   </main>
   <script>
-    const input = document.getElementById('serverInput');
     const statusEl = document.getElementById('status');
-    const defaultPort = '8030';
-
-    function normalizeServer(value) {
-      let text = String(value || '').trim();
-      text = text.replace(/^https?:\/\//i, '').replace(/\/.*$/, '');
-      if (!text) return '';
-      if (!text.includes(':')) text += ':' + defaultPort;
-      return text;
-    }
+    const loadingEl = document.getElementById('loading');
+    const wiredButton = document.getElementById('wiredButton');
+    const wirelessButton = document.getElementById('wirelessButton');
 
     function draw2Url(server) {
       return 'http://' + server + '/draw2?native=1';
@@ -147,35 +165,38 @@
       statusEl.textContent = message;
     }
 
-    const stored = localStorage.getItem('draw2NativeServer') || '';
-    input.value = stored || '';
+    function setLoading(loading) {
+      wiredButton.disabled = loading;
+      wirelessButton.disabled = loading;
+      loadingEl.classList.toggle('is-visible', loading);
+    }
 
-    document.getElementById('openButton').addEventListener('click', () => {
-      const server = normalizeServer(input.value);
-      if (!server) {
-        setStatus('MacのIPアドレスを入力してください');
-        return;
+    async function warmupServer(server) {
+      const response = await fetch('http://' + server + '/api/remote-draw/warmup', {
+        method: 'POST',
+        cache: 'no-store'
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || data.ok === false) {
+        throw new Error(data.error || '接続準備に失敗しました');
       }
-      localStorage.setItem('draw2NativeServer', server);
-      setStatus('接続中...');
-      window.location.href = draw2Url(server);
-    });
+    }
 
-    document.getElementById('testButton').addEventListener('click', async () => {
-      const server = normalizeServer(input.value);
-      if (!server) {
-        setStatus('MacのIPアドレスを入力してください');
-        return;
-      }
+    async function openServer(server) {
       localStorage.setItem('draw2NativeServer', server);
-      setStatus('確認中...');
+      setLoading(true);
+      setStatus(server + ' に接続し、フルーツ生成を準備しています...');
       try {
-        const response = await fetch('http://' + server + '/api/status?t=' + Date.now(), { cache: 'no-store' });
-        setStatus(response.ok ? '接続できます' : '応答はありますが状態確認に失敗しました');
+        await warmupServer(server);
+        window.location.href = draw2Url(server);
       } catch (error) {
-        setStatus('接続できません。Mac側の起動、IP、同一ネットワークを確認してください');
+        setLoading(false);
+        setStatus('接続できませんでした: ' + (error && error.message ? error.message : String(error)));
       }
-    });
+    }
+
+    wiredButton.addEventListener('click', () => openServer('192.168.50.1:8030'));
+    wirelessButton.addEventListener('click', () => openServer('10.100.138.194:8030'));
   </script>
 </body>
 </html>
